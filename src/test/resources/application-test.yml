@@ -1,0 +1,11 @@
+# Activated with @ActiveProfiles("test"): same infrastructure as local dev, but a separate
+# database and Redis key prefix so tests never touch development data.
+spring:
+  datasource:
+    url: ${TEST_DB_URL:jdbc:postgresql://localhost:5432/url_shortener_test}
+
+app:
+  base-url: http://sho.rt
+  cache:
+    key-prefix: "test:url:"
+    ttl: 10m

@@ -1,0 +1,20 @@
+# Local development dependencies for the URL shortener.
+# PostgreSQL runs natively on this machine; only Redis is containerised.
+#
+#   docker compose up -d      # start Redis
+#   docker compose stop redis # simulate a Redis outage (app falls back to PostgreSQL)
+#   docker compose down       # stop and remove the container
+services:
+  redis:
+    image: redis:8-alpine
+    container_name: url-shortener-redis
+    ports:
+      - "6379:6379"
+    # Cache-only usage: no persistence needed, cap memory and evict least-recently-used keys.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
