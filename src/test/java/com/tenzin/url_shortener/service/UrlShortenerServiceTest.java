@@ -53,7 +53,7 @@ class UrlShortenerServiceTest {
         AppProperties properties = new AppProperties("https://sho.rt/",
                 new AppProperties.Cache(Duration.ofHours(1), "url:", Duration.ofSeconds(10)),
                 new AppProperties.Clicks("clicks:pending", Duration.ofSeconds(30)),
-                new AppProperties.RateLimit(true, 20, Duration.ofMinutes(1), "rl:create:"),
+                new AppProperties.RateLimit(true, 20, Duration.ofMinutes(1), "rl:create:", ""),
                 new AppProperties.Codes(SECRET));
         service = new UrlShortenerService(repository, cache, clicks, codes, properties, Clock.fixed(NOW, ZoneOffset.UTC));
     }

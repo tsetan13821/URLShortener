@@ -53,7 +53,12 @@ public record AppProperties(
             /** Length of the counting window. */
             @NotNull Duration window,
             /** Redis key prefix for the per-client counters. */
-            @NotBlank String keyPrefix) {
+            @NotBlank String keyPrefix,
+            /**
+             * Request header holding the real client IP, set (and overwritten) by a trusted proxy,
+             * e.g. True-Client-IP on Render. Empty = the TCP connection's address.
+             */
+            @Nullable String clientIpHeader) {
     }
 
     public record Codes(

@@ -31,6 +31,7 @@ import org.springframework.test.web.servlet.ResultActions;
         "app.rate-limit.create-limit=3",
         "app.rate-limit.window=3s",
         "app.rate-limit.key-prefix=test:rl:it:",
+        "app.rate-limit.client-ip-header=True-Client-IP",
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
@@ -38,6 +39,7 @@ class RateLimitIntegrationTest {
 
     private static final String CLIENT_A = "203.0.113.10";
     private static final String CLIENT_B = "203.0.113.11";
+    private static final String PROXY = "10.0.0.1";
 
     @Autowired
     private MockMvc mockMvc;
@@ -104,6 +106,35 @@ class RateLimitIntegrationTest {
             mockMvc.perform(get("/" + code).with(from(CLIENT_A))).andExpect(status().isFound());
             mockMvc.perform(get("/api/urls/" + code + "/stats").with(from(CLIENT_A))).andExpect(status().isOk());
         }
+    }
+
+    /** As behind Render: every request arrives from the proxy; the client is named in the header. */
+    @Test
+    void clientsBehindAProxyAreToldApartByTheConfiguredHeader() throws Exception {
+        for (int i = 1; i <= 3; i++) {
+            viaProxy(CLIENT_A, "https://example.com/p-" + i).andExpect(status().isCreated());
+        }
+        viaProxy(CLIENT_A, "https://example.com/p-4").andExpect(status().isTooManyRequests());
+
+        // Another client via the same proxy has its own allowance...
+        viaProxy(CLIENT_B, "https://example.com/p-b").andExpect(status().isCreated());
+        // ...and a fake X-Forwarded-For changes nothing: client A is still limited.
+        ResultActions spoofed = mockMvc.perform(post("/api/urls").with(from(PROXY))
+                .header("True-Client-IP", CLIENT_A).header("X-Forwarded-For", "198.51.100.77")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"url\": \"https://example.com/p-5\"}"));
+        spoofed.andExpect(status().isTooManyRequests());
+    }
+
+    private ResultActions viaProxy(String clientIp, String url) throws Exception {
+        ResultActions result = mockMvc.perform(post("/api/urls").with(from(PROXY))
+                .header("True-Client-IP", clientIp)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"url\": \"" + url + "\"}"));
+        var response = result.andReturn().getResponse();
+        if (response.getStatus() == 201) {
+            createdCodes.add(JsonPath.read(response.getContentAsString(), "$.shortCode"));
+        }
+        return result;
     }
 
     @Test

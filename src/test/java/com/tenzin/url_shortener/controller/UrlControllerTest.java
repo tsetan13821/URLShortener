@@ -18,6 +18,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.Duration;
 import java.time.Instant;
 
+import com.tenzin.url_shortener.config.AppProperties;
 import com.tenzin.url_shortener.dto.LinkStatsResponse;
 import com.tenzin.url_shortener.dto.ShortUrlResponse;
 import com.tenzin.url_shortener.exception.RateLimitExceededException;
@@ -29,13 +30,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 /** Web layer only: routing, validation, status codes and error format. The service is mocked. */
 @WebMvcTest(UrlController.class)
+@Import(ClientIpResolver.class)
+@EnableConfigurationProperties(AppProperties.class) // real settings from application.yml (no client-IP header)
 class UrlControllerTest {
 
     @Autowired

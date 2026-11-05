@@ -49,7 +49,7 @@ class UrlCacheServiceTest {
         AppProperties properties = new AppProperties("http://sho.rt",
                 new AppProperties.Cache(TTL, "url:", BACKOFF),
                 new AppProperties.Clicks("clicks:pending", Duration.ofSeconds(30)),
-                new AppProperties.RateLimit(true, 20, Duration.ofMinutes(1), "rl:create:"),
+                new AppProperties.RateLimit(true, 20, Duration.ofMinutes(1), "rl:create:", ""),
                 new AppProperties.Codes(""));
         cache = new UrlCacheService(redis, properties, new RedisAvailability(properties, clock));
     }

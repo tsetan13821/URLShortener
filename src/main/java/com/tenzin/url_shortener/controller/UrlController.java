@@ -33,25 +33,27 @@ public class UrlController {
 
     private final UrlShortenerService service;
     private final RateLimiter rateLimiter;
+    private final ClientIpResolver clientIps;
 
-    public UrlController(UrlShortenerService service, RateLimiter rateLimiter) {
+    public UrlController(UrlShortenerService service, RateLimiter rateLimiter, ClientIpResolver clientIps) {
         this.service = service;
         this.rateLimiter = rateLimiter;
+        this.clientIps = clientIps;
     }
 
     /**
      * Creates a short link. 201 Created, with the short URL in both the body and the Location header.
      *
      * <p>Rate limited per client IP (429 Too Many Requests when over). The check runs after
-     * validation, so rejected URLs don't use up the client's allowance. The IP is the TCP peer, or
-     * the X-Forwarded-For client when {@code server.forward-headers-strategy} trusts a proxy.
+     * validation, so rejected URLs don't use up the client's allowance. See {@link ClientIpResolver}
+     * for where the client's IP comes from.
      */
     @PostMapping(path = "/api/urls",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ShortUrlResponse> create(@Valid @RequestBody CreateShortUrlRequest request,
                                                    HttpServletRequest servletRequest) {
-        rateLimiter.checkCreate(servletRequest.getRemoteAddr());
+        rateLimiter.checkCreate(clientIps.resolve(servletRequest));
         ShortUrlResponse response = service.shorten(request.url());
         return ResponseEntity.created(URI.create(response.shortUrl())).body(response);
     }

@@ -39,10 +39,15 @@ services:
       # Random 256-bit key, generated once by Render and kept across deploys.
       - key: CODE_SECRET
         generateValue: true
-      # Render's proxy ends HTTPS and adds X-Forwarded-For / -Proto: needed for the real client IP
-      # (rate limiting) and for HSTS.
+      # Render's proxy ends HTTPS and sets X-Forwarded-Proto: needed so the app knows requests were
+      # HTTPS (HSTS).
       - key: FORWARD_HEADERS_STRATEGY
         value: native
+      # Real client IP for rate limiting. Render (behind Cloudflare) sets True-Client-IP itself and
+      # overwrites any value a client sends. X-Forwarded-For is NOT usable here: Render keeps the
+      # client's own value and appends a Cloudflare address that changes per request.
+      - key: RATE_LIMIT_CLIENT_IP_HEADER
+        value: True-Client-IP
       # Free instance: 512 MB RAM, 0.1 CPU. Leave room for non-heap memory, use the single-threaded
       # GC (no spare CPUs anyway), and skip the slow optimising JIT tier for a faster start.
       - key: JAVA_TOOL_OPTIONS
