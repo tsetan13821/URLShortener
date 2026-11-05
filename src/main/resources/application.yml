@@ -13,14 +13,19 @@ spring:
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:10}
 
-  # The schema lives in src/main/resources/schema.sql (idempotent, runs at startup).
-  # Set DB_SCHEMA_INIT=never where the schema is managed externally (e.g. by Flyway or a DBA).
-  sql:
-    init:
-      mode: ${DB_SCHEMA_INIT:always}
+  # Schema changes are versioned Flyway migrations in src/main/resources/db/migration, applied in
+  # order at startup (each exactly once, recorded in the flyway_schema_history table).
+  flyway:
+    enabled: ${DB_MIGRATE:true}
+    # Databases created before Flyway already hold the V1 schema: record them as version 1
+    # instead of failing. Only applies to a non-empty schema without a history table; Hibernate's
+    # `validate` below still catches a schema that doesn't actually match.
+    baseline-on-migrate: true
+    baseline-version: 1
+    baseline-description: Existing schema before Flyway
 
   jpa:
-    # Hibernate never changes the schema; it only checks the entities match schema.sql.
+    # Hibernate never changes the schema; it only checks the entities match the migrations.
     hibernate:
       ddl-auto: validate
     # Don't keep a DB connection open for the whole HTTP request.

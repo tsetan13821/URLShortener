@@ -17,7 +17,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 /**
  * Runs against the real PostgreSQL test database (not an embedded substitute), so it also
- * proves schema.sql and the entity mapping agree (ddl-auto=validate) and that the
+ * proves the Flyway-migrated schema and the entity mapping agree (ddl-auto=validate) and that the
  * sequence/unique index behave as intended. Each test rolls back.
  */
 @DataJpaTest

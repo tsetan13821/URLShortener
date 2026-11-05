@@ -25,7 +25,8 @@ CREATE DATABASE url_shortener OWNER url_shortener;
 CREATE DATABASE url_shortener_test OWNER url_shortener;  -- used by the tests
 ```
 
-The table, sequence and index are created at startup from `src/main/resources/schema.sql`.
+The table, sequence and index are created at startup by Flyway from
+`src/main/resources/db/migration/` (see [Schema migrations](#schema-migrations)).
 
 ## Run
 
@@ -115,7 +116,7 @@ Every setting has a local-dev default and can be overridden with an environment 
 | `DB_URL` | `jdbc:postgresql://localhost:5432/url_shortener` | JDBC URL |
 | `DB_USERNAME` / `DB_PASSWORD` | `url_shortener` / `url_shortener` | DB credentials |
 | `DB_POOL_SIZE` | `10` | Hikari max pool size |
-| `DB_SCHEMA_INIT` | `always` | Run `schema.sql` at startup; `never` if the schema is managed elsewhere |
+| `DB_MIGRATE` | `true` | Apply pending Flyway migrations at startup; `false` if migrations are run separately |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / *(none)* | Redis connection |
 | `REDIS_CONNECT_TIMEOUT` / `REDIS_COMMAND_TIMEOUT` | `500ms` / `500ms` | Kept short so a slow Redis fails fast |
 | `APP_BASE_URL` | `http://localhost:8080` | Prefix for returned short URLs |
@@ -161,6 +162,24 @@ Create does not write to the cache; the first redirect does.
 Try it: `docker compose stop redis`, redirects keep working; `docker compose start redis`, and
 after the backoff the cache fills again.
 
+## Schema migrations
+
+The schema is managed by [Flyway](https://documentation.red-gate.com/flyway). Each change is a
+numbered SQL file in `src/main/resources/db/migration/`, applied in order at startup and recorded
+in the `flyway_schema_history` table, so every database (local, test, CI, production) ends up
+with the same schema.
+
+| File | Change |
+|---|---|
+| `V1__create_url_mappings.sql` | `url_mappings` table, ID sequence, unique index on `short_code` |
+
+- **Changing the schema:** add a new file (`V2__add_something.sql`). Never edit a migration that
+  has already been applied; Flyway checks their checksums and refuses to start if one changed.
+- **Databases created before Flyway** already contain the V1 schema. On first start Flyway records
+  them as version 1 ("baseline") without running V1, so existing links are untouched.
+- Hibernate runs with `ddl-auto=validate`: it never changes the schema, and startup fails if
+  the entities and the migrated schema disagree.
+
 ## Tests
 
 ```bash
@@ -192,7 +211,6 @@ Surefire reports are attached to it as a downloadable artifact.
   links, start the sequence higher or switch to random codes.
 - **Unknown codes aren't cached**, so scanning random codes reaches PostgreSQL every time.
   Add short-lived negative caching or rate limiting if that becomes a problem.
-- **Schema evolution:** `schema.sql` handles creation only; adopt Flyway before the schema changes.
 - **Top-level-domain list is bundled** with Apache Commons Validator, so a newly created TLD is
   only recognised after upgrading that dependency (new TLDs are rare).
 - **Redirect chains:** locally, the app's own short links are rejected because `localhost` is
