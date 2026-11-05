@@ -41,20 +41,30 @@ class RedisUnavailableIntegrationTest {
         String code = JsonPath.read(body, "$.shortCode");
 
         try {
-            // Several redirects: the first hits the Redis failure and starts the backoff,
-            // the rest skip Redis entirely. All must be served from PostgreSQL.
+            // First redirect: tries Redis, fails, starts the backoff, served from PostgreSQL.
+            // Its cost depends on how fast the OS refuses the connection (slow on Windows),
+            // so it's only checked for correctness.
+            redirectAndAssert(code);
+
+            // Later redirects (inside the backoff window) must not touch Redis at all,
+            // so they must be fast: no connection attempt, no timeout.
             long start = System.nanoTime();
             for (int i = 0; i < 5; i++) {
-                mockMvc.perform(get("/" + code))
-                        .andExpect(status().isFound())
-                        .andExpect(header().string("Location", "https://example.com/no-redis"));
+                redirectAndAssert(code);
             }
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-            // Generous bound: proves we aren't paying a Redis timeout on every request.
-            assertThat(elapsedMs).isLessThan(2_000);
+            // A single Redis connect/command timeout is 500ms; five requests well under that
+            // proves none of them waited on Redis.
+            assertThat(elapsedMs).isLessThan(500);
         } finally {
             repository.findByShortCode(code).ifPresent(repository::delete);
         }
+    }
+
+    private void redirectAndAssert(String code) throws Exception {
+        mockMvc.perform(get("/" + code))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "https://example.com/no-redis"));
     }
 
     @Test

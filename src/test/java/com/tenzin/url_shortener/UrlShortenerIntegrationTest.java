@@ -120,6 +120,23 @@ class UrlShortenerIntegrationTest {
                 .andExpect(jsonPath("$.shortCode").value("AzL8n0Y58m7"));
     }
 
+    @Test
+    void homePageAndAssetsAreServed() throws Exception {
+        mockMvc.perform(get("/"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .forwardedUrl("index.html"));
+
+        for (String asset : List.of("/index.html", "/styles.css", "/app.js", "/favicon.svg")) {
+            mockMvc.perform(get(asset)).andExpect(status().isOk());
+        }
+    }
+
+    @Test
+    void notFoundPageIsNotPubliclyServedAsAFile() throws Exception {
+        mockMvc.perform(get("/pages/not-found.html")).andExpect(status().isNotFound());
+    }
+
     private String create(String url) throws Exception {
         String body = mockMvc.perform(post("/api/urls").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\": \"" + url + "\"}"))

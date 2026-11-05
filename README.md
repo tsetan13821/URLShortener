@@ -32,6 +32,19 @@ docker compose up -d        # Redis on localhost:6379
 mvn spring-boot:run         # app on http://localhost:8080
 ```
 
+## Web UI
+
+Open **http://localhost:8080/** in a browser:
+
+- paste a URL (the `https://` is optional) and press **Shorten**
+- **Copy** or **Open** the short link; the target is shown underneath
+- **Recent in this browser** lists your last 8 links (kept in `localStorage`, not on the server)
+- dead links (`/zzzzz`, `/not-a-code`) show a readable "not found" page instead of JSON
+
+It is plain HTML/CSS/JS served by Spring Boot from `src/main/resources/static/`: no build
+step, no framework, same origin as the API (no CORS). It follows the system light/dark setting
+and works down to phone width.
+
 ## API
 
 ### Create a short link: `POST /api/urls`
@@ -62,15 +75,22 @@ curl -i http://localhost:8080/1
 # Location: https://spring.io/projects/spring-boot
 ```
 
+A trailing slash (`/1/`) redirects the same way.
+
 ### Errors
 
-All errors use RFC 9457 problem details (`application/problem+json`):
+API clients get RFC 9457 problem details (`application/problem+json`). Requests that explicitly
+accept `text/html` (browsers opening a link) get an HTML "not found" page for 404s instead;
+same status code, so nothing changes for API clients or `curl`.
 
 | Case | Status | Example body |
 |---|---|---|
 | Unknown short code | 404 | `{"title":"Short URL not found","status":404,"detail":"No URL found for short code 'abc'","shortCode":"abc","instance":"/abc"}` |
-| Path that can't be a code (`/favicon.ico`, > 11 chars) | 404 | Spring's standard "No static resource" problem detail |
-| Invalid / missing URL | 400 | `{"title":"Invalid request","status":400,"errors":[{"field":"url","message":"must be a valid http or https URL"}]}` |
+| Path that can't be a code (`/not-a-code`, > 11 chars) | 404 | Spring's standard "No static resource" problem detail |
+| Invalid / missing URL | 400 | `{"title":"Invalid request","status":400,"errors":[{"field":"url","code":"HttpUrl","message":"must be a valid http or https URL"}]}` |
+
+`errors[].code` is the violated constraint (`NotBlank`, `Size` or `HttpUrl`). It's stable,
+so clients can map it to their own wording (the web UI does), while `message` is for humans.
 | Malformed JSON | 400 | |
 | Wrong `Content-Type` | 415 | |
 | Anything unexpected | 500 | Generic message; details logged server-side only |
@@ -103,8 +123,11 @@ service/     UrlShortenerService      create (nextval -> Base62 -> INSERT) and c
 repository/  UrlMappingRepository     findByShortCode, nextId()
 entity/      UrlMapping               immutable; Persistable so save() is a single INSERT
 dto/         CreateShortUrlRequest, ShortUrlResponse, @HttpUrl validator
-exception/   GlobalExceptionHandler   ProblemDetail for every error; ShortUrlNotFoundException
+exception/   GlobalExceptionHandler   ProblemDetail for API clients, HTML 404 page for browsers
 config/      AppProperties, RedisConfig, ClockConfig
+
+resources/static/   index.html, styles.css, app.js, favicon.svg   (web UI, served at /)
+resources/pages/    not-found.html   (browser 404 page; not publicly served as a file)
 ```
 
 **Create:** `nextval('url_mappings_id_seq')` → `Base62.encode(id)` → one `INSERT` with ID and code.
@@ -142,9 +165,9 @@ Needs the PostgreSQL test database and Redis running (`docker compose up -d`). T
 | `UrlMappingRepositoryTest` | real PostgreSQL: schema matches entity, sequence, unique index |
 | `UrlShortenerServiceTest` | create flow, cache hit / miss / not-found (mocked) |
 | `UrlCacheServiceTest` | TTL, failures swallowed, backoff window and recovery |
-| `UrlControllerTest` | status codes, validation, problem-detail format, route pattern |
-| `UrlShortenerIntegrationTest` | full stack: create → redirect → Redis populated with TTL → served from cache |
-| `RedisUnavailableIntegrationTest` | app starts and serves with Redis down, no per-request timeout |
+| `UrlControllerTest` | status codes, validation + error codes, problem-detail format, route pattern, trailing slash, HTML vs JSON 404 |
+| `UrlShortenerIntegrationTest` | full stack: create → redirect → Redis populated with TTL → served from cache; web UI files served |
+| `RedisUnavailableIntegrationTest` | app starts and serves with Redis down; requests in the backoff window never wait on Redis |
 
 ## Known trade-offs / next steps
 

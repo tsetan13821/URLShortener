@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>URL Shortener</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main class="page">
+    <header class="masthead">
+      <h1>URL Shortener</h1>
+      <p class="lede">Paste a long link and get a short one that redirects to it.</p>
+    </header>
+
+    <form id="shorten-form" novalidate>
+      <label for="url" class="label">Long URL</label>
+      <div class="field">
+        <input id="url" name="url" type="text" inputmode="url"
+               autocomplete="off" autocapitalize="off" spellcheck="false" autofocus
+               placeholder="https://example.com/some/long/path?ref=newsletter">
+        <button type="submit" id="submit">Shorten</button>
+      </div>
+      <p class="hint">No need to type <code>https://</code>. It's added if you leave it out.</p>
+      <p id="error" class="error" role="alert" hidden></p>
+    </form>
+
+    <section id="result" class="result" aria-live="polite" hidden>
+      <p class="label">Your short link</p>
+      <div class="result-row">
+        <a id="result-link" class="short-url" href="#" target="_blank" rel="noopener"></a>
+        <div class="actions">
+          <button type="button" class="btn" id="copy">Copy</button>
+          <a class="btn" id="open" href="#" target="_blank" rel="noopener">Open&nbsp;↗</a>
+        </div>
+      </div>
+      <p class="target">→ <span id="result-original"></span></p>
+    </section>
+
+    <section id="recent" class="recent" hidden>
+      <div class="recent-head">
+        <h2 class="label">Recent in this browser</h2>
+        <button type="button" class="link-btn" id="clear">Clear</button>
+      </div>
+      <ol id="recent-list" class="recent-list"></ol>
+    </section>
+
+    <footer class="footer">
+      <code>POST /api/urls</code> creates a link. <code>GET /{code}</code> answers with a 302 redirect.
+      Links are stored in PostgreSQL and lookups are cached in Redis.
+    </footer>
+  </main>
+</body>
+</html>

@@ -42,8 +42,11 @@ public class UrlController {
         return ResponseEntity.created(URI.create(response.shortUrl())).body(response);
     }
 
-    /** Redirects to the original URL with 302 Found; unknown codes become 404 via the exception handler. */
-    @GetMapping("/{shortCode:" + SHORT_CODE_PATTERN + "}")
+    /**
+     * Redirects to the original URL with 302 Found; unknown codes become 404 via the exception handler.
+     * A trailing slash (a common copy/paste slip, e.g. {@code /3/}) is accepted too.
+     */
+    @GetMapping({"/{shortCode:" + SHORT_CODE_PATTERN + "}", "/{shortCode:" + SHORT_CODE_PATTERN + "}/"})
     public ResponseEntity<Void> redirect(@PathVariable String shortCode) {
         String originalUrl = service.resolve(shortCode);
         return ResponseEntity.status(HttpStatus.FOUND)

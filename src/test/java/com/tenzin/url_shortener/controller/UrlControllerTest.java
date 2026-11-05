@@ -132,4 +132,57 @@ class UrlControllerTest {
 
         verify(service, never()).resolve(anyString());
     }
+
+    // ---- Browser-friendly behaviour ------------------------------------------------
+
+    /** What Chrome/Firefox/Edge send when you open a link. */
+    private static final String BROWSER_ACCEPT =
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+
+    @Test
+    void trailingSlashRedirectsLikeTheBareCode() throws Exception {
+        when(service.resolve("21")).thenReturn("https://example.com/page");
+
+        mockMvc.perform(get("/21/"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "https://example.com/page"));
+    }
+
+    @Test
+    void browserOpeningUnknownCodeGetsHtmlNotFoundPage() throws Exception {
+        when(service.resolve("zzz")).thenThrow(new ShortUrlNotFoundException("zzz"));
+
+        mockMvc.perform(get("/zzz").header("Accept", BROWSER_ACCEPT))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_HTML))
+                .andExpect(content().string(containsString("This link doesn't go anywhere")));
+    }
+
+    @Test
+    void browserOpeningImpossiblePathGetsHtmlNotFoundPage() throws Exception {
+        mockMvc.perform(get("/not-a-code").header("Accept", BROWSER_ACCEPT))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_HTML));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"*/*", "application/json", "application/problem+json"})
+    void apiClientsStillGetJsonForUnknownCodes(String accept) throws Exception {
+        when(service.resolve("zzz")).thenThrow(new ShortUrlNotFoundException("zzz"));
+
+        mockMvc.perform(get("/zzz").header("Accept", accept))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.shortCode").value("zzz"));
+    }
+
+    @Test
+    void validationErrorsIncludeMachineReadableCode() throws Exception {
+        mockMvc.perform(post("/api/urls").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"url\": \"ftp://example.com\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("url"))
+                .andExpect(jsonPath("$.errors[0].code").value("HttpUrl"))
+                .andExpect(jsonPath("$.errors[0].message").value("must be a valid http or https URL"));
+    }
 }

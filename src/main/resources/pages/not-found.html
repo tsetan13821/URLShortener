@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex">
+  <title>Link not found · URL Shortener</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="page">
+    <p class="status">404</p>
+    <h1>This link doesn't go anywhere.</h1>
+    <p class="lede" id="explain">
+      There's no short link at this address. It may have been typed wrong.
+      Short codes are case-sensitive, so <code>aB3</code> and <code>ab3</code> are different links.
+    </p>
+    <p class="back"><a class="btn" href="/">Shorten a URL</a></p>
+  </main>
+  <script>
+    // Show the exact path that was requested (textContent, never innerHTML).
+    (function () {
+      var path = location.pathname;
+      try { path = decodeURIComponent(path); } catch (e) { /* malformed %-escape: show it raw */ }
+      if (path.length < 2) return;
+      var explain = document.getElementById('explain');
+      var code = document.createElement('code');
+      code.className = 'path';
+      code.textContent = path;
+      explain.replaceChildren(
+        document.createTextNode('There’s no short link at '), code,
+        document.createTextNode('. It may have been typed wrong. Short codes are case-sensitive, so check the capital letters.'));
+    })();
+  </script>
+</body>
+</html>
