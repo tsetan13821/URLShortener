@@ -1,4 +1,5 @@
-# Runs the full test suite against real PostgreSQL and Redis on every push and pull request.
+# On every push and pull request: the full test suite against real PostgreSQL and Redis, and a
+# build + smoke test of the Docker image.
 name: CI
 
 on:
@@ -61,3 +62,32 @@ jobs:
           name: surefire-reports
           path: target/surefire-reports/
           retention-days: 7
+
+  # Builds the Docker image and starts the full stack from compose.yaml, then checks the
+  # containerised app really works: healthy, creates a link, redirects it.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build and start app + PostgreSQL + Redis
+        run: docker compose --profile full up -d --build --wait --wait-timeout 180
+        env:
+          CODE_SECRET: ci-smoke-test-code-secret
+
+      - name: Smoke test
+        run: |
+          set -eu
+          curl -fsS http://localhost:8080/actuator/health
+          code=$(curl -fsS -H 'Content-Type: application/json' \
+            -d '{"url":"https://github.com/tsetan13821/URLShortener"}' \
+            http://localhost:8080/api/urls | jq -r .shortCode)
+          echo "created $code"
+          location=$(curl -sS -o /dev/null -w '%{redirect_url}' "http://localhost:8080/$code")
+          test "$location" = "https://github.com/tsetan13821/URLShortener"
+          curl -fsS -o /dev/null http://localhost:8080/
+
+      - name: Container logs
+        if: always()
+        run: docker compose --profile full logs app

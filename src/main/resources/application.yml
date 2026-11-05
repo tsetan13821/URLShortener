@@ -61,6 +61,20 @@ server:
   # without such a proxy: clients could then fake their IP to dodge the limit.
   forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:none}
 
+# Health check for Docker / load balancers: GET /actuator/health -> {"status":"UP"} (200) or 503.
+# Only the health endpoint is exposed. Redis is left out of it on purpose: the app keeps serving
+# without Redis, so a Redis outage must not mark the app unhealthy and get it restarted.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+      discovery:
+        enabled: false
+  health:
+    redis:
+      enabled: false
+
 app:
   # Public base URL used to build short links, e.g. https://sho.rt
   base-url: ${APP_BASE_URL:http://localhost:8080}

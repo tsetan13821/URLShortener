@@ -10,6 +10,17 @@ unique by construction yet don't reveal the ID, so links can't be enumerated by 
 Redirect lookups go through a Redis cache-aside layer and fall back to PostgreSQL whenever Redis is
 unavailable.
 
+## Quick start with Docker
+
+Only Docker is needed: the app, PostgreSQL 18 and Redis all run in containers.
+
+```bash
+docker compose --profile full up -d --build   # app on http://localhost:8080
+docker compose --profile full down            # stop (links are kept in the pgdata volume)
+```
+
+See [Docker](#docker) for details. To develop or run the tests, set up the tools below instead.
+
 ## Prerequisites
 
 | | Version used |
@@ -17,7 +28,7 @@ unavailable.
 | JDK | 21+ (built and tested on 27) |
 | Maven | 3.9+ (or the bundled `./mvnw`) |
 | PostgreSQL | 18 (any recent version works) |
-| Docker | for Redis via `compose.yaml` |
+| Docker | for Redis via `compose.yaml` (or the whole stack, see above) |
 
 One-time database setup (as a PostgreSQL superuser):
 
@@ -33,8 +44,8 @@ The table, sequence and index are created at startup by Flyway from
 ## Run
 
 ```bash
-docker compose up -d        # Redis on localhost:6379
-mvn spring-boot:run         # app on http://localhost:8080
+docker compose up -d        # Redis on localhost:6379 (no profile = Redis only)
+mvn spring-boot:run         # app on http://localhost:8080, using your local PostgreSQL
 ```
 
 ## Web UI
@@ -166,6 +177,7 @@ Every setting has a local-dev default and can be overridden with an environment 
 | `FORWARD_HEADERS_STRATEGY` | `none` | Set to `native` only behind a trusted reverse proxy, so the client IP is read from `X-Forwarded-For` |
 | `CODE_SECRET` | *(empty: public dev key, logs a warning)* | Key that scrambles IDs into codes, 16+ characters. **Set it in every deployment** and keep it stable |
 | `SERVER_PORT` | `8080` | HTTP port |
+| `SPRING_DATA_REDIS_DATABASE` | `0` | Redis database index (the Docker setup uses `1`) |
 
 ## Design
 
@@ -254,6 +266,41 @@ checks the unique index first and skips such an ID.
 
 This is obscurity, not access control: whoever has a link can open it.
 
+## Docker
+
+**Image** (`Dockerfile`, multi-stage):
+- *build* stage: JDK 21, `./mvnw package` with the Maven repository in a BuildKit cache, so
+  dependencies are downloaded once, not on every build. Tests don't run here: they need
+  PostgreSQL and Redis and run in CI;
+- *run* stage: JRE 21 only, as a non-root `app` user. The jar is unpacked into Spring Boot's layers
+  (dependencies → loader → snapshots → application), so after a code change only the small
+  application layer is rebuilt and pushed;
+- the heap is sized from the container's memory limit (`MaxRAMPercentage=75`), and the JVM exits on
+  `OutOfMemoryError` so the container is restarted instead of limping on;
+- `HEALTHCHECK` calls `/actuator/health`.
+
+**Health:** `GET /actuator/health` → `200 {"status":"UP"}`, or `503` when PostgreSQL is unreachable.
+Redis is deliberately left out: the app keeps working without it, so a Redis outage must not mark
+the app unhealthy and get it restarted. Only the health endpoint is exposed.
+
+**`compose.yaml`:**
+
+| Command | Starts |
+|---|---|
+| `docker compose up -d` | Redis only (for running the app from the IDE / `mvn` against a native PostgreSQL) |
+| `docker compose --profile full up -d --build` | app + PostgreSQL 18 + Redis |
+
+- PostgreSQL is published on host port **5433** (`PG_PORT`), so it doesn't clash with a native
+  install on 5432; data lives in the `pgdata` volume (`down -v` deletes it). Flyway creates the
+  schema on first start.
+- The app waits for PostgreSQL to be healthy, but only for Redis to be *started*, since Redis is
+  optional.
+- The containerised app uses Redis **database 1**. An app run from the IDE uses database 0 of the
+  same Redis with a different PostgreSQL, and sharing keys would mix up their cache and clicks.
+- Settings come from the shell or a `.env` file: `CODE_SECRET`, `APP_PORT` (default 8080),
+  `PG_PORT`. Example: `APP_PORT=8081 docker compose --profile full up -d` runs it next to an app
+  already using 8080.
+
 ## Schema migrations
 
 The schema is managed by [Flyway](https://documentation.red-gate.com/flyway). Each change is a
@@ -282,9 +329,11 @@ mvn test
 Needs the PostgreSQL test database and Redis running (`docker compose up -d`). They use
 `url_shortener_test` and `test:url:` Redis keys, never your dev data.
 
-**CI:** `.github/workflows/ci.yml` runs the same suite on every push to `main` and every pull
-request, against fresh PostgreSQL 18 and Redis 8 service containers. When a run fails, the
-Surefire reports are attached to it as a downloadable artifact.
+**CI:** `.github/workflows/ci.yml` runs two jobs on every push to `main` and every pull request:
+- **test:** the same suite, against fresh PostgreSQL 18 and Redis 8 service containers. When a
+  run fails, the Surefire reports are attached to it as a downloadable artifact;
+- **docker:** builds the image, starts the full stack from `compose.yaml`, waits for it to be
+  healthy, then creates a link and follows its redirect.
 
 | Test | Covers |
 |---|---|

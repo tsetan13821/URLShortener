@@ -1,9 +1,19 @@
-# Local development dependencies for the URL shortener.
-# PostgreSQL runs natively on this machine; only Redis is containerised.
+# Two ways to use this file:
 #
-#   docker compose up -d      # start Redis
-#   docker compose stop redis # simulate a Redis outage (app falls back to PostgreSQL)
-#   docker compose down       # stop and remove the container
+#   docker compose up -d                        # Redis only: for running the app / tests from the IDE
+#                                               # against a natively installed PostgreSQL (port 5432)
+#   docker compose --profile full up -d --build # everything in containers: app + PostgreSQL + Redis,
+#                                               # app on http://localhost:8080
+#
+#   docker compose stop redis                   # simulate a Redis outage (app falls back to PostgreSQL)
+#   docker compose --profile full down          # stop and remove the containers (data volume is kept)
+#   docker compose --profile full down -v       # ... and delete the PostgreSQL data too
+#
+# Optional settings, from the shell or a .env file next to this one:
+#   CODE_SECRET  key that scrambles IDs into short codes (16+ chars); empty = public dev key
+#   APP_PORT     host port for the app (default 8080)
+#   PG_PORT      host port for the containerised PostgreSQL (default 5433, so it doesn't clash
+#                with a native PostgreSQL on 5432)
 services:
   redis:
     image: redis:8-alpine
@@ -18,3 +28,49 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+
+  postgres:
+    profiles: [full]
+    image: postgres:18
+    environment:
+      POSTGRES_DB: url_shortener
+      POSTGRES_USER: url_shortener
+      POSTGRES_PASSWORD: url_shortener
+    ports:
+      - "${PG_PORT:-5433}:5432"
+    volumes:
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/<major>/; mount the parent.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U url_shortener -d url_shortener"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    profiles: [full]
+    build: .
+    image: url-shortener:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Redis is optional at runtime, so only wait for it to be started, not healthy.
+      redis:
+        condition: service_started
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/url_shortener
+      DB_USERNAME: url_shortener
+      DB_PASSWORD: url_shortener
+      REDIS_HOST: redis
+      # Redis database 1, not 0: an app run from the IDE uses database 0 of the same Redis but a
+      # different PostgreSQL, so sharing keys would mix up their cached links and click counts.
+      SPRING_DATA_REDIS_DATABASE: 1
+      APP_BASE_URL: http://localhost:${APP_PORT:-8080}
+      CODE_SECRET: ${CODE_SECRET:-}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
