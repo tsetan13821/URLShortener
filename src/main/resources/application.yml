@@ -65,3 +65,8 @@ app:
     key-prefix: ${CACHE_KEY_PREFIX:url:}
     # After a Redis failure, skip Redis for this long instead of paying a timeout on every request.
     failure-backoff: ${CACHE_FAILURE_BACKOFF:10s}
+  clicks:
+    # Redirects count clicks in this Redis hash; a background job writes them to PostgreSQL
+    # in one batch every flush-interval (so redirects never write to the database).
+    pending-key: ${CLICKS_PENDING_KEY:clicks:pending}
+    flush-interval: ${CLICKS_FLUSH_INTERVAL:30s}

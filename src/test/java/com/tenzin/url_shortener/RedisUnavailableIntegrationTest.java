@@ -32,6 +32,9 @@ class RedisUnavailableIntegrationTest {
     @Autowired
     private UrlMappingRepository repository;
 
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
     @Test
     void createAndRedirectStillWorkWithoutRedis() throws Exception {
         String body = mockMvc.perform(post("/api/urls").contentType(MediaType.APPLICATION_JSON)
@@ -56,6 +59,11 @@ class RedisUnavailableIntegrationTest {
                 long elapsedMs = (System.nanoTime() - start) / 1_000_000;
                 assertThat(elapsedMs).as("redirect %d took %dms", i + 1, elapsedMs).isLessThan(400);
             }
+
+            // With Redis down, clicks go straight to PostgreSQL instead of being lost.
+            assertThat(jdbc.queryForObject(
+                    "SELECT click_count FROM url_mappings WHERE short_code = ?", Long.class, code))
+                    .isEqualTo(6L);
         } finally {
             repository.findByShortCode(code).ifPresent(repository::delete);
         }

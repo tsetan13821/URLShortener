@@ -39,13 +39,44 @@ class UrlShortenerServiceTest {
     @Mock
     private UrlCacheService cache;
 
+    @Mock
+    private ClickCounter clicks;
+
     private UrlShortenerService service;
 
     @BeforeEach
     void setUp() {
         AppProperties properties = new AppProperties("https://sho.rt/",
-                new AppProperties.Cache(Duration.ofHours(1), "url:", Duration.ofSeconds(10)));
-        service = new UrlShortenerService(repository, cache, properties, Clock.fixed(NOW, ZoneOffset.UTC));
+                new AppProperties.Cache(Duration.ofHours(1), "url:", Duration.ofSeconds(10)),
+                new AppProperties.Clicks("clicks:pending", Duration.ofSeconds(30)));
+        service = new UrlShortenerService(repository, cache, clicks, properties, Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    @Test
+    void recordClickDelegatesToClickCounter() {
+        service.recordClick("21");
+
+        verify(clicks).record("21");
+    }
+
+    @Test
+    void statsAddPendingRedisClicksToStoredCount() {
+        when(repository.findByShortCode("21"))
+                .thenReturn(Optional.of(new UrlMapping(125L, "21", "https://example.com/page", NOW)));
+        when(clicks.pending("21")).thenReturn(4L);
+
+        var stats = service.stats("21");
+
+        assertThat(stats.shortUrl()).isEqualTo("https://sho.rt/21");
+        assertThat(stats.clicks()).isEqualTo(4L); // 0 stored + 4 pending
+        assertThat(stats.lastClickedAt()).isNull();
+    }
+
+    @Test
+    void statsForUnknownCodeThrowsNotFound() {
+        when(repository.findByShortCode("nope")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.stats("nope")).isInstanceOf(ShortUrlNotFoundException.class);
     }
 
     @Test

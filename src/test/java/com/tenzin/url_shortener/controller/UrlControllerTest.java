@@ -7,6 +7,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -15,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.time.Instant;
 
+import com.tenzin.url_shortener.dto.LinkStatsResponse;
 import com.tenzin.url_shortener.dto.ShortUrlResponse;
 import com.tenzin.url_shortener.exception.ShortUrlNotFoundException;
 import com.tenzin.url_shortener.service.UrlShortenerService;
@@ -112,6 +114,59 @@ class UrlControllerTest {
         mockMvc.perform(get("/21"))
                 .andExpect(status().isFound())
                 .andExpect(header().string("Location", "https://example.com/page?q=1"));
+    }
+
+    // ---- Click counting and stats ------------------------------------------------------
+
+    @Test
+    void getRedirectCountsAClick() throws Exception {
+        when(service.resolve("21")).thenReturn("https://example.com");
+
+        mockMvc.perform(get("/21")).andExpect(status().isFound());
+
+        verify(service).recordClick("21");
+    }
+
+    @Test
+    void headRedirectIsNotCounted() throws Exception {
+        when(service.resolve("21")).thenReturn("https://example.com");
+
+        mockMvc.perform(head("/21"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "https://example.com"));
+
+        verify(service, never()).recordClick(anyString());
+    }
+
+    @Test
+    void unknownCodeIsNotCounted() throws Exception {
+        when(service.resolve("zzz")).thenThrow(new ShortUrlNotFoundException("zzz"));
+
+        mockMvc.perform(get("/zzz")).andExpect(status().isNotFound());
+
+        verify(service, never()).recordClick(anyString());
+    }
+
+    @Test
+    void statsReturnsClickCount() throws Exception {
+        when(service.stats("21")).thenReturn(new LinkStatsResponse("21", "http://localhost:8080/21",
+                "https://example.com", Instant.parse("2026-11-05T10:00:00Z"), 42,
+                Instant.parse("2026-11-05T11:00:00Z")));
+
+        mockMvc.perform(get("/api/urls/21/stats"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.clicks").value(42))
+                .andExpect(jsonPath("$.lastClickedAt").value("2026-11-05T11:00:00Z"))
+                .andExpect(jsonPath("$.originalUrl").value("https://example.com"));
+    }
+
+    @Test
+    void statsForUnknownCodeIs404() throws Exception {
+        when(service.stats("zzz")).thenThrow(new ShortUrlNotFoundException("zzz"));
+
+        mockMvc.perform(get("/api/urls/zzz/stats"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.shortCode").value("zzz"));
     }
 
     @Test

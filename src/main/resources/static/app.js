@@ -165,6 +165,7 @@
     const items = loadRecent();
     recentList.replaceChildren(...items.map(recentItem));
     recent.hidden = items.length === 0;
+    refreshClickCounts();
   }
 
   function recentItem(link) {
@@ -182,15 +183,51 @@
     original.textContent = link.originalUrl;
     original.title = link.originalUrl;
 
+    const clicks = document.createElement('span');
+    clicks.className = 'clicks';
+    clicks.dataset.code = link.shortCode;
+    clicks.textContent = '…';
+
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'btn';
     button.textContent = 'Copy';
     button.addEventListener('click', () => copy(link.shortUrl, button));
 
-    li.append(code, original, button);
+    li.append(code, original, clicks, button);
     return li;
   }
+
+  // ---- Click counts ------------------------------------------------------------
+
+  /** Fills in the click count of every link in the recent list (at most MAX_RECENT requests). */
+  function refreshClickCounts() {
+    recentList.querySelectorAll('.clicks').forEach(async (cell) => {
+      try {
+        const response = await fetch(`/api/urls/${encodeURIComponent(cell.dataset.code)}/stats`,
+          { headers: { Accept: 'application/json' } });
+        if (response.status === 404) {
+          cell.textContent = 'gone';
+          cell.title = 'This link no longer exists';
+          return;
+        }
+        if (!response.ok) throw new Error(String(response.status));
+        const stats = await response.json();
+        cell.textContent = stats.clicks === 1 ? '1 click' : `${stats.clicks.toLocaleString()} clicks`;
+        cell.title = stats.lastClickedAt
+          ? `Last clicked ${new Date(stats.lastClickedAt).toLocaleString()}`
+          : 'Not clicked yet';
+      } catch {
+        cell.textContent = '–';
+        cell.title = "Couldn't load the click count";
+      }
+    });
+  }
+
+  // Counts change when links are opened in other tabs; refresh when the user comes back.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshClickCounts();
+  });
 
   clearButton.addEventListener('click', () => {
     saveRecent([]);

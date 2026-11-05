@@ -46,6 +46,16 @@ public class UrlMapping implements Persistable<Long> {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    /**
+     * Read-only from JPA's point of view: written only by batched SQL updates in
+     * {@code ClickStatsRepository}, never by saving the entity, so a stale entity can't overwrite them.
+     */
+    @Column(name = "click_count", nullable = false, insertable = false, updatable = false)
+    private long clickCount;
+
+    @Column(name = "last_clicked_at", insertable = false, updatable = false)
+    private Instant lastClickedAt;
+
     @Transient
     private boolean isNew = true;
 
@@ -86,5 +96,15 @@ public class UrlMapping implements Persistable<Long> {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    /** Clicks already written to PostgreSQL (excludes clicks still pending in Redis). */
+    public long getClickCount() {
+        return clickCount;
+    }
+
+    /** When clicks were last written for this link; accurate to the flush interval. Null if never clicked. */
+    public Instant getLastClickedAt() {
+        return lastClickedAt;
     }
 }

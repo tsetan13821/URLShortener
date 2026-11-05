@@ -3,11 +3,13 @@ package com.tenzin.url_shortener.controller;
 import java.net.URI;
 
 import com.tenzin.url_shortener.dto.CreateShortUrlRequest;
+import com.tenzin.url_shortener.dto.LinkStatsResponse;
 import com.tenzin.url_shortener.dto.ShortUrlResponse;
 import com.tenzin.url_shortener.service.UrlShortenerService;
 
 import jakarta.validation.Valid;
 
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -45,12 +47,25 @@ public class UrlController {
     /**
      * Redirects to the original URL with 302 Found; unknown codes become 404 via the exception handler.
      * A trailing slash (a common copy/paste slip, e.g. {@code /3/}) is accepted too.
+     *
+     * <p>Counts a click for GET only. HEAD (also routed here by Spring) is what link-preview bots and
+     * uptime checkers mostly send, so it is not counted.
      */
     @GetMapping({"/{shortCode:" + SHORT_CODE_PATTERN + "}", "/{shortCode:" + SHORT_CODE_PATTERN + "}/"})
-    public ResponseEntity<Void> redirect(@PathVariable String shortCode) {
+    public ResponseEntity<Void> redirect(@PathVariable String shortCode, HttpMethod method) {
         String originalUrl = service.resolve(shortCode);
+        if (HttpMethod.GET.equals(method)) {
+            service.recordClick(shortCode);
+        }
         return ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(originalUrl))
                 .build();
+    }
+
+    /** Click statistics for one link. Unknown codes become 404 via the exception handler. */
+    @GetMapping(path = "/api/urls/{shortCode:" + SHORT_CODE_PATTERN + "}/stats",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public LinkStatsResponse stats(@PathVariable String shortCode) {
+        return service.stats(shortCode);
     }
 }

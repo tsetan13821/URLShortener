@@ -42,6 +42,7 @@ Open **http://localhost:8080/** in a browser:
 - paste a URL (the `https://` is optional) and press **Shorten**
 - **Copy** or **Open** the short link; the target is shown underneath
 - **Recent in this browser** lists your last 8 links (kept in `localStorage`, not on the server)
+  with each link's **click count** (hover for when it was last clicked)
 - dead links (`/zzzzz`, `/not-a-code`) show a readable "not found" page instead of JSON
 
 It is plain HTML/CSS/JS served by Spring Boot from `src/main/resources/static/`: no build
@@ -87,7 +88,23 @@ curl -i http://localhost:8080/1
 # Location: https://spring.io/projects/spring-boot
 ```
 
-A trailing slash (`/1/`) redirects the same way.
+A trailing slash (`/1/`) redirects the same way. Each `GET` counts as a click; `HEAD` requests
+(mostly link-preview bots and uptime checks) are not counted.
+
+### Click stats: `GET /api/urls/{shortCode}/stats`
+
+```bash
+curl http://localhost:8080/api/urls/3/stats
+```
+
+```json
+{"shortCode":"3","shortUrl":"http://localhost:8080/3","originalUrl":"https://github.com/tsetan13821/URLShortener",
+ "createdAt":"2026-11-05T06:21:21.587259Z","clicks":11,"lastClickedAt":"2026-11-05T08:10:19.465158Z"}
+```
+
+`clicks` is always current (it includes clicks not yet written to PostgreSQL). `lastClickedAt` is
+accurate to the flush interval (30 s by default) and `null` until the first flush after a click.
+Unknown codes return 404.
 
 ### Errors
 
@@ -122,17 +139,22 @@ Every setting has a local-dev default and can be overridden with an environment 
 | `APP_BASE_URL` | `http://localhost:8080` | Prefix for returned short URLs |
 | `CACHE_TTL` | `24h` | Redis TTL per mapping |
 | `CACHE_KEY_PREFIX` | `url:` | Redis key namespace |
-| `CACHE_FAILURE_BACKOFF` | `10s` | After a Redis error, skip Redis for this long |
+| `CACHE_FAILURE_BACKOFF` | `10s` | After a Redis error, skip Redis (cache and click counting) for this long |
+| `CLICKS_PENDING_KEY` | `clicks:pending` | Redis hash holding clicks not yet written to PostgreSQL |
+| `CLICKS_FLUSH_INTERVAL` | `30s` | How often pending clicks are written to PostgreSQL |
 | `SERVER_PORT` | `8080` | HTTP port |
 
 ## Design
 
 ```
-controller/  UrlController            HTTP mapping, 201 / 302
-service/     UrlShortenerService      create (nextval -> Base62 -> INSERT) and cache-aside resolve
-             UrlCacheService          Redis get/put with TTL; never throws; failure backoff
+controller/  UrlController            HTTP mapping: 201 create, 302 redirect, click stats
+service/     UrlShortenerService      create (nextval -> Base62 -> INSERT), cache-aside resolve, stats
+             UrlCacheService          Redis get/put with TTL; never throws
+             ClickCounter             clicks -> Redis HINCRBY; scheduled batch flush to PostgreSQL
+             RedisAvailability        shared "Redis is down, skip it for N seconds" backoff
              Base62                   encode/decode, overflow-safe
 repository/  UrlMappingRepository     findByShortCode, nextId()
+             ClickStatsRepository     batched click_count updates (JDBC)
 entity/      UrlMapping               immutable; Persistable so save() is a single INSERT
 dto/         CreateShortUrlRequest, ShortUrlResponse, @HttpUrl validator (real TLD / public IP)
 exception/   GlobalExceptionHandler   ProblemDetail for API clients, HTML 404 page for browsers
@@ -162,6 +184,18 @@ Create does not write to the cache; the first redirect does.
 Try it: `docker compose stop redis`, redirects keep working; `docker compose start redis`, and
 after the backoff the cache fills again.
 
+**Click analytics without database writes on redirects:**
+- a redirect records its click with `HINCRBY clicks:pending <code> 1` in Redis (atomic,
+  sub-millisecond), so cached redirects still never touch PostgreSQL;
+- every 30 s a scheduled job takes the whole hash *and deletes it* in one atomic Lua script, then
+  writes all counts in a single JDBC batch (`click_count = click_count + n`). Clicks arriving
+  mid-flush go into a fresh hash, and multiple app instances can never flush the same clicks twice;
+- if PostgreSQL fails during a flush, the counts are put back into Redis for the next attempt;
+- while Redis is unavailable, clicks are written to PostgreSQL directly, so none are lost.
+
+Measured locally: 7,300 cached redirects/s with counting (7,900 without), and 20,200 clicks
+cost **one** PostgreSQL transaction.
+
 ## Schema migrations
 
 The schema is managed by [Flyway](https://documentation.red-gate.com/flyway). Each change is a
@@ -172,6 +206,7 @@ with the same schema.
 | File | Change |
 |---|---|
 | `V1__create_url_mappings.sql` | `url_mappings` table, ID sequence, unique index on `short_code` |
+| `V2__add_click_stats.sql` | `click_count` (default 0) and `last_clicked_at` columns |
 
 - **Changing the schema:** add a new file (`V2__add_something.sql`). Never edit a migration that
   has already been applied; Flyway checks their checksums and refuses to start if one changed.
@@ -203,7 +238,9 @@ Surefire reports are attached to it as a downloadable artifact.
 | `UrlCacheServiceTest` | TTL, failures swallowed, backoff window and recovery |
 | `UrlControllerTest` | status codes, validation + error codes, problem-detail format, route pattern, trailing slash, HTML vs JSON 404 |
 | `UrlShortenerIntegrationTest` | full stack: create → redirect → Redis populated with TTL → served from cache; web UI files served |
-| `RedisUnavailableIntegrationTest` | app starts and serves with Redis down; requests in the backoff window never wait on Redis |
+| `ClickAnalyticsIntegrationTest` | clicks counted in Redis, flushed to PostgreSQL, stats current; 1,000 concurrent clicks with racing flushes counted exactly; HEAD / unknown codes not counted |
+| `RedisUnavailableIntegrationTest` | app starts and serves with Redis down; requests in the backoff window never wait on Redis; clicks written straight to PostgreSQL |
+| `FlywayMigrationTest` | database is at the newest migration, none pending |
 
 ## Known trade-offs / next steps
 
@@ -211,6 +248,9 @@ Surefire reports are attached to it as a downloadable artifact.
   links, start the sequence higher or switch to random codes.
 - **Unknown codes aren't cached**, so scanning random codes reaches PostgreSQL every time.
   Add short-lived negative caching or rate limiting if that becomes a problem.
+- **Click counts can lose up to one flush interval** of clicks if Redis itself crashes (it runs
+  without persistence). Enable Redis AOF persistence if exact counts matter. Counts also include
+  bots that send `GET`; only `HEAD` requests are excluded.
 - **Top-level-domain list is bundled** with Apache Commons Validator, so a newly created TLD is
   only recognised after upgrading that dependency (new TLDs are rare).
 - **Redirect chains:** locally, the app's own short links are rejected because `localhost` is

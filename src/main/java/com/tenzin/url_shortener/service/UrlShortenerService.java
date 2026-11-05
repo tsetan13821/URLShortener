@@ -5,6 +5,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 
 import com.tenzin.url_shortener.config.AppProperties;
+import com.tenzin.url_shortener.dto.LinkStatsResponse;
 import com.tenzin.url_shortener.dto.ShortUrlResponse;
 import com.tenzin.url_shortener.entity.UrlMapping;
 import com.tenzin.url_shortener.exception.ShortUrlNotFoundException;
@@ -18,13 +19,15 @@ public class UrlShortenerService {
 
     private final UrlMappingRepository repository;
     private final UrlCacheService cache;
+    private final ClickCounter clicks;
     private final AppProperties properties;
     private final Clock clock;
 
-    public UrlShortenerService(UrlMappingRepository repository, UrlCacheService cache,
+    public UrlShortenerService(UrlMappingRepository repository, UrlCacheService cache, ClickCounter clicks,
                                AppProperties properties, Clock clock) {
         this.repository = repository;
         this.cache = cache;
+        this.clicks = clicks;
         this.properties = properties;
         this.clock = clock;
     }
@@ -68,11 +71,39 @@ public class UrlShortenerService {
         return originalUrl;
     }
 
+    /** Counts one visit of an existing link (cheap: a Redis increment, see {@link ClickCounter}). */
+    public void recordClick(String shortCode) {
+        clicks.record(shortCode);
+    }
+
+    /**
+     * Link details plus click count. The count adds clicks still pending in Redis to those already
+     * written to PostgreSQL, so it's current even between flushes.
+     *
+     * @throws ShortUrlNotFoundException if the code has no mapping
+     */
+    @Transactional(readOnly = true)
+    public LinkStatsResponse stats(String shortCode) {
+        UrlMapping mapping = repository.findByShortCode(shortCode)
+                .orElseThrow(() -> new ShortUrlNotFoundException(shortCode));
+        return new LinkStatsResponse(
+                mapping.getShortCode(),
+                shortUrl(mapping),
+                mapping.getOriginalUrl(),
+                mapping.getCreatedAt(),
+                mapping.getClickCount() + clicks.pending(shortCode),
+                mapping.getLastClickedAt());
+    }
+
     private ShortUrlResponse toResponse(UrlMapping mapping) {
         return new ShortUrlResponse(
                 mapping.getShortCode(),
-                properties.baseUrl() + "/" + mapping.getShortCode(),
+                shortUrl(mapping),
                 mapping.getOriginalUrl(),
                 mapping.getCreatedAt());
+    }
+
+    private String shortUrl(UrlMapping mapping) {
+        return properties.baseUrl() + "/" + mapping.getShortCode();
     }
 }

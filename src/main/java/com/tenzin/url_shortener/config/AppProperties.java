@@ -17,7 +17,8 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties(prefix = "app")
 public record AppProperties(
         @NotBlank String baseUrl,
-        @Valid @NotNull Cache cache) {
+        @Valid @NotNull Cache cache,
+        @Valid @NotNull Clicks clicks) {
 
     public AppProperties {
         // Normalise so we can always build "<baseUrl>/<code>".
@@ -29,6 +30,14 @@ public record AppProperties(
     public record Cache(
             @NotNull Duration ttl,
             @NotNull String keyPrefix,
+            /** After a Redis error, skip Redis (cache and click counting) for this long. */
             @NotNull Duration failureBackoff) {
+    }
+
+    public record Clicks(
+            /** Redis hash holding clicks not yet written to PostgreSQL (field = short code). */
+            @NotBlank String pendingKey,
+            /** How often pending clicks are written to PostgreSQL. */
+            @NotNull Duration flushInterval) {
     }
 }

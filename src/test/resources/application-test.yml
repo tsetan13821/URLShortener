@@ -9,3 +9,7 @@ app:
   cache:
     key-prefix: "test:url:"
     ttl: 10m
+  clicks:
+    pending-key: "test:clicks:pending"
+    # Tests call ClickCounter.flush() themselves; keep the scheduled flush out of their way.
+    flush-interval: 1h
