@@ -40,6 +40,14 @@ spring:
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:500ms}
       timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
 
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          # Web UI files: browsers may keep a copy but must check it's still current before using it
+          # (a cheap 304 Not Modified when nothing changed), so an update is never served stale.
+          no-cache: true
+
 server:
   port: ${SERVER_PORT:8080}
 

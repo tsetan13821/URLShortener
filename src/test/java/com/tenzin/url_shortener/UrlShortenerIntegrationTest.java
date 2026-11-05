@@ -128,7 +128,10 @@ class UrlShortenerIntegrationTest {
                         .forwardedUrl("index.html"));
 
         for (String asset : List.of("/index.html", "/styles.css", "/app.js", "/favicon.svg")) {
-            mockMvc.perform(get(asset)).andExpect(status().isOk());
+            mockMvc.perform(get(asset))
+                    .andExpect(status().isOk())
+                    // Browsers must revalidate, so a new deploy is never served from a stale cache.
+                    .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-cache")));
         }
     }
 

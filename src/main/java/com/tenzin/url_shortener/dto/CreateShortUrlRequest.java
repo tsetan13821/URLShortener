@@ -13,9 +13,10 @@ public record CreateShortUrlRequest(
         String url) {
 
     public CreateShortUrlRequest {
-        // Forgive surrounding whitespace from copy/paste; validation runs on the trimmed value.
+        // Forgive copy/paste quirks the way a browser would (surrounding whitespace, characters like
+        // '|' or a Unicode domain); validation then runs on, and we store, the cleaned-up value.
         if (url != null) {
-            url = url.strip();
+            url = UrlNormalizer.normalize(url.strip());
         }
     }
 }

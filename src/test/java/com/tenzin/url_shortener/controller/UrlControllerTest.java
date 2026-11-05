@@ -180,6 +180,18 @@ class UrlControllerTest {
     }
 
     @Test
+    void createNormalisesUrlsBrowsersWouldAccept() throws Exception {
+        String normalized = "https://fonts.googleapis.com/css?family=Roboto%7COpen+Sans";
+        when(service.shorten(normalized)).thenReturn(new ShortUrlResponse(
+                "F", "http://localhost:8080/F", normalized, Instant.parse("2026-11-05T10:15:30Z")));
+
+        mockMvc.perform(post("/api/urls").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"url\": \"https://fonts.googleapis.com/css?family=Roboto|Open+Sans\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.originalUrl").value(normalized));
+    }
+
+    @Test
     void validationErrorsIncludeMachineReadableCode() throws Exception {
         mockMvc.perform(post("/api/urls").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\": \"ftp://example.com\"}"))
