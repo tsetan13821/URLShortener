@@ -4,9 +4,11 @@
 
 Spring Boot 4.1 · Java 21 · Spring Data JPA · PostgreSQL · Redis · Maven
 
-Short codes are the Base62 encoding (`[0-9A-Za-z]`) of auto-incremented PostgreSQL IDs:
-ID `1` → `1`, `62` → `10`, `1,000,000` → `4C92`. Redirect lookups go through a Redis
-cache-aside layer and fall back to PostgreSQL whenever Redis is unavailable.
+Every link gets a unique ID from a PostgreSQL sequence, which a keyed permutation turns into a
+6-character Base62 code (`[0-9A-Za-z]`): IDs 46, 47, 48 → `jck9vw`, `puzvL4`, `bpmIFU`. Codes are
+unique by construction yet don't reveal the ID, so links can't be enumerated by counting.
+Redirect lookups go through a Redis cache-aside layer and fall back to PostgreSQL whenever Redis is
+unavailable.
 
 ## Prerequisites
 
@@ -61,10 +63,10 @@ curl -i -X POST http://localhost:8080/api/urls \
 
 ```http
 HTTP/1.1 201 Created
-Location: http://localhost:8080/1
+Location: http://localhost:8080/jck9vw
 Content-Type: application/json
 
-{"shortCode":"1","shortUrl":"http://localhost:8080/1",
+{"shortCode":"jck9vw","shortUrl":"http://localhost:8080/jck9vw",
  "originalUrl":"https://spring.io/projects/spring-boot","createdAt":"2026-11-05T06:03:51.277447Z"}
 ```
 
@@ -98,12 +100,12 @@ Content-Type: application/problem+json
 ### Redirect: `GET /{shortCode}`
 
 ```bash
-curl -i http://localhost:8080/1
+curl -i http://localhost:8080/jck9vw
 # HTTP/1.1 302 Found
 # Location: https://spring.io/projects/spring-boot
 ```
 
-A trailing slash (`/1/`) redirects the same way. Each `GET` counts as a click; `HEAD` requests
+A trailing slash (`/jck9vw/`) redirects the same way. Each `GET` counts as a click; `HEAD` requests
 (mostly link-preview bots and uptime checks) are not counted.
 
 ### Click stats: `GET /api/urls/{shortCode}/stats`
@@ -162,13 +164,15 @@ Every setting has a local-dev default and can be overridden with an environment 
 | `RATE_LIMIT_CREATE` / `RATE_LIMIT_WINDOW` | `20` / `1m` | Links one client may create per window |
 | `RATE_LIMIT_KEY_PREFIX` | `rl:create:` | Redis key namespace for the counters |
 | `FORWARD_HEADERS_STRATEGY` | `none` | Set to `native` only behind a trusted reverse proxy, so the client IP is read from `X-Forwarded-For` |
+| `CODE_SECRET` | *(empty: public dev key, logs a warning)* | Key that scrambles IDs into codes, 16+ characters. **Set it in every deployment** and keep it stable |
 | `SERVER_PORT` | `8080` | HTTP port |
 
 ## Design
 
 ```
 controller/  UrlController            HTTP mapping: 201 create, 302 redirect, click stats
-service/     UrlShortenerService      create (nextval -> Base62 -> INSERT), cache-aside resolve, stats
+service/     UrlShortenerService      create (nextval -> code -> INSERT), cache-aside resolve, stats
+             ShortCodeGenerator       ID -> 6-char code via keyed Feistel permutation
              UrlCacheService          Redis get/put with TTL; never throws
              ClickCounter             clicks -> Redis HINCRBY; scheduled batch flush to PostgreSQL
              RateLimiter              per-client create limit (Redis fixed window, fails open)
@@ -185,7 +189,7 @@ resources/static/   index.html, styles.css, app.js, favicon.svg   (web UI, serve
 resources/pages/    not-found.html   (browser 404 page; not publicly served as a file)
 ```
 
-**Create:** `nextval('url_mappings_id_seq')` → `Base62.encode(id)` → one `INSERT` with ID and code.
+**Create:** `nextval('url_mappings_id_seq')` → `ShortCodeGenerator.codeFor(id)` → one `INSERT` with ID and code.
 The service reserves the ID first so the code can be written in the same statement, which lets
 `short_code` be `NOT NULL` with a unique index. Sequences never repeat a value, so concurrent
 creates can't collide.
@@ -231,6 +235,25 @@ cost **one** PostgreSQL transaction.
   from the proxy, so set `FORWARD_HEADERS_STRATEGY=native` there. Never set it without a trusted
   proxy in front: anyone could then send a fake `X-Forwarded-For` to dodge the limit.
 
+**Non-guessable codes:** sequential codes (`1`, `2`, `3`…) let anyone walk through every link
+and show how many exist. Random codes would fix that but can collide, which means retries and a
+collision rate that grows with the table. Instead the ID is run through a **Feistel permutation**
+keyed with `CODE_SECRET` (8 rounds, HMAC-SHA256 round function) over the 62^6 ≈ 56.8 billion
+6-character codes:
+- a permutation maps every ID to a different code, so there are still no collisions and no retries;
+- the Feistel network needs an even number of bits (36, slightly more than 62^6), so a result
+  outside the code space is fed through again ("cycle walking") until it lands inside;
+- without the secret, consecutive IDs give unrelated codes. Guessing a valid code means hitting one
+  of N links among 56.8 billion codes;
+- after 56.8 billion links, codes grow to 7 characters (a separate permutation), and so on.
+
+Links created before this change keep their codes (`/3` still works): redirects look up the stored
+code, so nothing is migrated. Old codes are 1–2 characters and new ones 6, so they can't collide.
+If the secret is ever changed, a new code could match one made with the old secret; the service
+checks the unique index first and skips such an ID.
+
+This is obscurity, not access control: whoever has a link can open it.
+
 ## Schema migrations
 
 The schema is managed by [Flyway](https://documentation.red-gate.com/flyway). Each change is a
@@ -266,14 +289,15 @@ Surefire reports are attached to it as a downloadable artifact.
 | Test | Covers |
 |---|---|
 | `Base62Test` | known values, round trips, `Long.MAX_VALUE`, invalid/overflowing input |
+| `ShortCodeGeneratorTest` | 6-char codes, no duplicates over 100k IDs, exact permutation (exhaustive on small spaces), secret-dependent, growth to 7 chars, thread safety |
 | `UrlNormalizerTest` | browser-accepted URLs (`\|`, `{}`, spaces, Unicode domains) cleaned up; valid ones untouched |
 | `HttpUrlValidatorTest` | real domains / public IPs accepted; bare words, fake TLDs, localhost, private IPs, bad schemes rejected |
 | `UrlMappingRepositoryTest` | real PostgreSQL: schema matches entity, sequence, unique index |
-| `UrlShortenerServiceTest` | create flow, cache hit / miss / not-found (mocked) |
+| `UrlShortenerServiceTest` | create flow, taken code skipped, cache hit / miss / not-found (mocked) |
 | `UrlCacheServiceTest` | TTL, failures swallowed, backoff window and recovery |
 | `RateLimiterTest` | IPv4 / IPv6 /64 / IPv4-mapped client keys; `Retry-After` rounding |
 | `UrlControllerTest` | status codes, validation + error codes, problem-detail format, route pattern, trailing slash, HTML vs JSON 404, 429 format |
-| `UrlShortenerIntegrationTest` | full stack: create → redirect → Redis populated with TTL → served from cache; web UI files served |
+| `UrlShortenerIntegrationTest` | full stack: create → redirect → Redis populated with TTL → served from cache; codes don't follow ID order; old sequential codes still redirect; web UI files served |
 | `ClickAnalyticsIntegrationTest` | clicks counted in Redis, flushed to PostgreSQL, stats current; 1,000 concurrent clicks with racing flushes counted exactly; HEAD / unknown codes not counted |
 | `RateLimitIntegrationTest` | real Redis: limit + 1 refused with `Retry-After`, per-client allowance, redirects/stats unlimited, invalid URLs not counted, allowance back after the window |
 | `RedisUnavailableIntegrationTest` | app starts and serves with Redis down; requests in the backoff window never wait on Redis; clicks written straight to PostgreSQL; rate limit fails open |
@@ -281,8 +305,9 @@ Surefire reports are attached to it as a downloadable artifact.
 
 ## Known trade-offs / next steps
 
-- **Codes are sequential and guessable** (`1`, `2`, `3`…). Fine for public links; for private
-  links, start the sequence higher or switch to random codes.
+- **Codes hide the ID but aren't secrets.** They resist enumeration, not sharing: anyone with a
+  link can open it, and the codes are only as hidden as `CODE_SECRET`. Leaking it lets someone
+  compute every code from its ID again, i.e. enumerate links as if they were sequential.
 - **Unknown codes aren't cached**, so scanning random codes reaches PostgreSQL every time.
   Creation is rate limited, but redirects aren't (limiting them would also slow real visitors);
   add short-lived negative caching, or limit at the proxy, if scanning becomes a problem.

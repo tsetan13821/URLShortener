@@ -15,6 +15,7 @@ import com.jayway.jsonpath.JsonPath;
 import com.tenzin.url_shortener.entity.UrlMapping;
 import com.tenzin.url_shortener.repository.UrlMappingRepository;
 import com.tenzin.url_shortener.service.Base62;
+import com.tenzin.url_shortener.service.ShortCodeGenerator;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +45,9 @@ class UrlShortenerIntegrationTest {
     @Autowired
     private StringRedisTemplate redis;
 
+    @Autowired
+    private ShortCodeGenerator codeGenerator;
+
     private final List<String> createdCodes = new ArrayList<>();
 
     @AfterEach
@@ -58,7 +62,7 @@ class UrlShortenerIntegrationTest {
     void createThenRedirect() throws Exception {
         String code = create("https://example.com/integration?x=1");
 
-        assertThat(code).isEqualTo(Base62.encode(repository.findByShortCode(code).orElseThrow().getId()));
+        assertThat(code).hasSize(6).isEqualTo(codeGenerator.codeFor(repository.findByShortCode(code).orElseThrow().getId()));
 
         mockMvc.perform(get("/" + code))
                 .andExpect(status().isFound())
@@ -75,12 +79,30 @@ class UrlShortenerIntegrationTest {
     }
 
     @Test
-    void createdCodesAreUniqueAndIncreasing() throws Exception {
+    void consecutiveCodesAreUniqueAndUnrelated() throws Exception {
         String first = create("https://example.com/1");
         String second = create("https://example.com/1"); // same URL -> new code by design
 
         assertThat(second).isNotEqualTo(first);
-        assertThat(Base62.decode(second)).isGreaterThan(Base62.decode(first));
+        long firstId = repository.findByShortCode(first).orElseThrow().getId();
+        long secondId = repository.findByShortCode(second).orElseThrow().getId();
+        assertThat(secondId).isGreaterThan(firstId); // still allocated in order...
+        assertThat(second.substring(0, 3)).isNotEqualTo(first.substring(0, 3)); // ...but codes don't show it
+    }
+
+    @Test
+    void linksWithOldSequentialCodesStillRedirect() throws Exception {
+        // Links created before codes were scrambled have short codes like "3": lookup is by the
+        // stored code, so they keep working.
+        long id = repository.nextId();
+        String legacyCode = Base62.encode(id); // the old scheme; at most 5 characters here
+        repository.save(new UrlMapping(id, legacyCode, "https://example.com/legacy",
+                java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS)));
+        createdCodes.add(legacyCode);
+
+        mockMvc.perform(get("/" + legacyCode))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "https://example.com/legacy"));
     }
 
     @Test

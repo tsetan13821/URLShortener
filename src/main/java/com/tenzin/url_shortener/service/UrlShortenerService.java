@@ -20,28 +20,39 @@ public class UrlShortenerService {
     private final UrlMappingRepository repository;
     private final UrlCacheService cache;
     private final ClickCounter clicks;
+    private final ShortCodeGenerator codes;
     private final AppProperties properties;
     private final Clock clock;
 
     public UrlShortenerService(UrlMappingRepository repository, UrlCacheService cache, ClickCounter clicks,
-                               AppProperties properties, Clock clock) {
+                               ShortCodeGenerator codes, AppProperties properties, Clock clock) {
         this.repository = repository;
         this.cache = cache;
         this.clicks = clicks;
+        this.codes = codes;
         this.properties = properties;
         this.clock = clock;
     }
 
     /**
-     * Reserves the next sequence value, Base62-encodes it into the short code and stores the
-     * mapping in a single INSERT. Every call creates a new code, even for a URL seen before.
+     * Reserves the next sequence value, turns it into a short code ({@link ShortCodeGenerator}) and
+     * stores the mapping in a single INSERT. Every call creates a new code, even for a URL seen before.
+     *
+     * <p>Codes from one secret never collide (the generator is a permutation), but a code may already
+     * be taken by a link created under an earlier secret or the old sequential scheme. Such an ID is
+     * skipped. With one secret this check never fails, so it costs one indexed lookup per create.
      */
     @Transactional
     public ShortUrlResponse shorten(String originalUrl) {
-        long id = repository.nextId();
+        long id;
+        String shortCode;
+        do {
+            id = repository.nextId();
+            shortCode = codes.codeFor(id);
+        } while (repository.existsByShortCode(shortCode));
         UrlMapping mapping = new UrlMapping(
                 id,
-                Base62.encode(id),
+                shortCode,
                 originalUrl,
                 // PostgreSQL stores microseconds; truncate so the response matches what's persisted.
                 clock.instant().truncatedTo(ChronoUnit.MICROS));

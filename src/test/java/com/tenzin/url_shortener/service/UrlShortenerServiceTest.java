@@ -32,6 +32,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 class UrlShortenerServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-11-05T10:15:30.123456789Z");
+    private static final String SECRET = "unit-test-code-secret";
+
+    /** Real generator (pure function): lets the tests assert on actual codes. */
+    private final ShortCodeGenerator codes = new ShortCodeGenerator(SECRET);
 
     @Mock
     private UrlMappingRepository repository;
@@ -49,8 +53,9 @@ class UrlShortenerServiceTest {
         AppProperties properties = new AppProperties("https://sho.rt/",
                 new AppProperties.Cache(Duration.ofHours(1), "url:", Duration.ofSeconds(10)),
                 new AppProperties.Clicks("clicks:pending", Duration.ofSeconds(30)),
-                new AppProperties.RateLimit(true, 20, Duration.ofMinutes(1), "rl:create:"));
-        service = new UrlShortenerService(repository, cache, clicks, properties, Clock.fixed(NOW, ZoneOffset.UTC));
+                new AppProperties.RateLimit(true, 20, Duration.ofMinutes(1), "rl:create:"),
+                new AppProperties.Codes(SECRET));
+        service = new UrlShortenerService(repository, cache, clicks, codes, properties, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test
@@ -81,8 +86,9 @@ class UrlShortenerServiceTest {
     }
 
     @Test
-    void shortenEncodesTheSequenceIdAndSavesOnce() {
-        when(repository.nextId()).thenReturn(125L); // 125 = 2*62 + 1 -> "21"
+    void shortenDerivesTheCodeFromTheSequenceIdAndSavesOnce() {
+        String expected = codes.codeFor(125L);
+        when(repository.nextId()).thenReturn(125L);
         when(repository.save(any(UrlMapping.class))).thenAnswer(inv -> inv.getArgument(0));
 
         ShortUrlResponse response = service.shorten("https://example.com/page");
@@ -90,14 +96,27 @@ class UrlShortenerServiceTest {
         ArgumentCaptor<UrlMapping> saved = ArgumentCaptor.forClass(UrlMapping.class);
         verify(repository).save(saved.capture());
         assertThat(saved.getValue().getId()).isEqualTo(125L);
-        assertThat(saved.getValue().getShortCode()).isEqualTo("21");
+        assertThat(saved.getValue().getShortCode()).isEqualTo(expected).hasSize(6);
         assertThat(saved.getValue().isNew()).isTrue();
 
-        assertThat(response.shortCode()).isEqualTo("21");
+        assertThat(response.shortCode()).isEqualTo(expected);
         // Trailing slash in base-url is normalised away.
-        assertThat(response.shortUrl()).isEqualTo("https://sho.rt/21");
+        assertThat(response.shortUrl()).isEqualTo("https://sho.rt/" + expected);
         assertThat(response.originalUrl()).isEqualTo("https://example.com/page");
         assertThat(response.createdAt()).isEqualTo(Instant.parse("2026-11-05T10:15:30.123456Z"));
+    }
+
+    @Test
+    void shortenSkipsAnIdWhoseCodeIsAlreadyTaken() {
+        // e.g. a link created before CODE_SECRET was changed already holds the code for ID 7
+        when(repository.nextId()).thenReturn(7L, 8L);
+        when(repository.existsByShortCode(codes.codeFor(7L))).thenReturn(true);
+        when(repository.save(any(UrlMapping.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ShortUrlResponse response = service.shorten("https://example.com/page");
+
+        assertThat(response.shortCode()).isEqualTo(codes.codeFor(8L));
+        verify(repository).save(any(UrlMapping.class));
     }
 
     @Test

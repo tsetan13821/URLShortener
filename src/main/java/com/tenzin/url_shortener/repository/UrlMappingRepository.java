@@ -13,6 +13,8 @@ public interface UrlMappingRepository extends JpaRepository<UrlMapping, Long> {
     /** Served by the unique index on {@code short_code}. */
     Optional<UrlMapping> findByShortCode(String shortCode);
 
+    boolean existsByShortCode(String shortCode);
+
     /**
      * Reserves the next auto-incremented ID. Sequences are non-transactional and never hand out
      * the same value twice, so concurrent creators can't collide (a rolled-back create just

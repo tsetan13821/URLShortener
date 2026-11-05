@@ -5,8 +5,10 @@ import java.time.Duration;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -20,7 +22,8 @@ public record AppProperties(
         @NotBlank String baseUrl,
         @Valid @NotNull Cache cache,
         @Valid @NotNull Clicks clicks,
-        @Valid @NotNull RateLimit rateLimit) {
+        @Valid @NotNull RateLimit rateLimit,
+        @Valid @NotNull Codes codes) {
 
     public AppProperties {
         // Normalise so we can always build "<baseUrl>/<code>".
@@ -51,5 +54,14 @@ public record AppProperties(
             @NotNull Duration window,
             /** Redis key prefix for the per-client counters. */
             @NotBlank String keyPrefix) {
+    }
+
+    public record Codes(
+            /**
+             * Key for the permutation that turns IDs into codes. Empty = a built-in development key
+             * (logged as a warning). Keep it stable: changing it changes all future codes.
+             */
+            @Pattern(regexp = "|.{16,}", message = "must be empty or at least 16 characters")
+            @Nullable String secret) {
     }
 }

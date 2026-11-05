@@ -18,3 +18,5 @@ app:
     # Every MockMvc request comes from 127.0.0.1, so a real limit would trip across test classes.
     # RateLimitIntegrationTest sets a small limit for itself.
     create-limit: 100000
+  codes:
+    secret: "test-only-code-secret-0123456789"
