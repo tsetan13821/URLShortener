@@ -12,6 +12,11 @@ spring:
     password: ${DB_PASSWORD:url_shortener}
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:10}
+      # Connections kept open while idle (default: the pool size). Serverless PostgreSQL (e.g. Neon)
+      # only sleeps, and stops using its compute allowance, once no connection is open: set
+      # DB_POOL_MIN_IDLE=0 there; idle connections then close after DB_POOL_IDLE_TIMEOUT_MS (milliseconds).
+      minimum-idle: ${DB_POOL_MIN_IDLE:${DB_POOL_SIZE:10}}
+      idle-timeout: ${DB_POOL_IDLE_TIMEOUT_MS:600000}
 
   # Schema changes are versioned Flyway migrations in src/main/resources/db/migration, applied in
   # order at startup (each exactly once, recorded in the flyway_schema_history table).
@@ -37,6 +42,8 @@ spring:
 
   data:
     redis:
+      # Alternatively set SPRING_DATA_REDIS_URL (redis://[user:password@]host:port, rediss:// for TLS):
+      # when present it replaces host/port/password. (Not listed here: an empty URL is invalid.)
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
@@ -44,6 +51,11 @@ spring:
       # fail fast and let the request fall back to PostgreSQL.
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:500ms}
       timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
+
+  mvc:
+    servlet:
+      # Initialise Spring MVC at startup rather than on the first request (see config/WarmUp).
+      load-on-startup: 1
 
   web:
     resources:
@@ -54,7 +66,8 @@ spring:
           no-cache: true
 
 server:
-  port: ${SERVER_PORT:8080}
+  # PORT: set by hosting platforms such as Render.
+  port: ${SERVER_PORT:${PORT:8080}}
   # Where the client IP (used for rate limiting) comes from. "none" = the TCP connection, which is
   # correct when clients connect directly. Behind a trusted reverse proxy / load balancer set
   # FORWARD_HEADERS_STRATEGY=native (or framework) so X-Forwarded-For is honoured. Never enable it
@@ -77,7 +90,8 @@ management:
 
 app:
   # Public base URL used to build short links, e.g. https://sho.rt
-  base-url: ${APP_BASE_URL:http://localhost:8080}
+  # On Render, RENDER_EXTERNAL_URL (e.g. https://my-app.onrender.com) is set automatically.
+  base-url: ${APP_BASE_URL:${RENDER_EXTERNAL_URL:http://localhost:8080}}
   cache:
     # How long a short-code -> URL mapping stays in Redis.
     ttl: ${CACHE_TTL:24h}

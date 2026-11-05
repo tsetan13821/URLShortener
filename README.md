@@ -162,10 +162,12 @@ Every setting has a local-dev default and can be overridden with an environment 
 | `DB_URL` | `jdbc:postgresql://localhost:5432/url_shortener` | JDBC URL |
 | `DB_USERNAME` / `DB_PASSWORD` | `url_shortener` / `url_shortener` | DB credentials |
 | `DB_POOL_SIZE` | `10` | Hikari max pool size |
+| `DB_POOL_MIN_IDLE` / `DB_POOL_IDLE_TIMEOUT_MS` | pool size / `600000` | Idle connections kept open, and after how many ms extra ones close. `0` lets serverless databases sleep |
 | `DB_MIGRATE` | `true` | Apply pending Flyway migrations at startup; `false` if migrations are run separately |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / *(none)* | Redis connection |
+| `SPRING_DATA_REDIS_URL` | *(unset)* | `redis://[user:password@]host:port` (or `rediss://` for TLS); replaces the three above |
 | `REDIS_CONNECT_TIMEOUT` / `REDIS_COMMAND_TIMEOUT` | `500ms` / `500ms` | Kept short so a slow Redis fails fast |
-| `APP_BASE_URL` | `http://localhost:8080` | Prefix for returned short URLs |
+| `APP_BASE_URL` | `RENDER_EXTERNAL_URL` if set, else `http://localhost:8080` | Prefix for returned short URLs |
 | `CACHE_TTL` | `24h` | Redis TTL per mapping |
 | `CACHE_KEY_PREFIX` | `url:` | Redis key namespace |
 | `CACHE_FAILURE_BACKOFF` | `10s` | After a Redis error, skip Redis (cache and click counting) for this long |
@@ -176,7 +178,7 @@ Every setting has a local-dev default and can be overridden with an environment 
 | `RATE_LIMIT_KEY_PREFIX` | `rl:create:` | Redis key namespace for the counters |
 | `FORWARD_HEADERS_STRATEGY` | `none` | Set to `native` only behind a trusted reverse proxy, so the client IP is read from `X-Forwarded-For` |
 | `CODE_SECRET` | *(empty: public dev key, logs a warning)* | Key that scrambles IDs into codes, 16+ characters. **Set it in every deployment** and keep it stable |
-| `SERVER_PORT` | `8080` | HTTP port |
+| `SERVER_PORT` | `PORT` if set, else `8080` | HTTP port |
 | `SPRING_DATA_REDIS_DATABASE` | `0` | Redis database index (the Docker setup uses `1`) |
 
 ## Design
@@ -266,6 +268,13 @@ checks the unique index first and skips such an ID.
 
 This is obscurity, not access control: whoever has a link can open it.
 
+**Security headers** (`config/SecurityHeadersFilter`, on every response):
+- `Content-Security-Policy`: scripts, styles, images and API calls from this site only, no inline
+  code, no framing. Even if a bug let a link's text into a page as HTML, it couldn't run;
+- `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, `Cross-Origin-Opener-Policy: same-origin`;
+- `Strict-Transport-Security` (1 year) only on HTTPS requests, so `http://localhost` is unaffected.
+
 ## Docker
 
 **Image** (`Dockerfile`, multi-stage):
@@ -277,11 +286,26 @@ This is obscurity, not access control: whoever has a link can open it.
   application layer is rebuilt and pushed;
 - the heap is sized from the container's memory limit (`MaxRAMPercentage=75`), and the JVM exits on
   `OutOfMemoryError` so the container is restarted instead of limping on;
-- `HEALTHCHECK` calls `/actuator/health`.
+- `HEALTHCHECK` calls `/actuator/health/readiness` (see below).
 
-**Health:** `GET /actuator/health` → `200 {"status":"UP"}`, or `503` when PostgreSQL is unreachable.
-Redis is deliberately left out: the app keeps working without it, so a Redis outage must not mark
-the app unhealthy and get it restarted. Only the health endpoint is exposed.
+**Health endpoints** (only these are exposed):
+
+| Path | `UP` when | Used by |
+|---|---|---|
+| `/actuator/health` | app running **and** PostgreSQL reachable (else `503`) | you / monitoring |
+| `/actuator/health/liveness` | the app is running | uptime pings |
+| `/actuator/health/readiness` | startup and warm-up are finished | Docker `HEALTHCHECK`, Render |
+
+Redis is left out of all of them: the app keeps working without it, so a Redis outage must not
+mark the app unhealthy and get it restarted. Liveness and readiness don't query the database
+either. Something polls them every few seconds, and that alone would keep a serverless database
+like Neon awake (and burning its free hours) around the clock.
+
+**Warm-up:** the JVM loads code on first use, so on a small instance (0.1 CPU) the first request
+after a start took over 20 s. `config/WarmUp` runs validation, code generation, JSON and a database
+lookup once at startup, before readiness turns `UP`, and Spring MVC is initialised at startup
+instead of on the first request. The first real request took 4 s instead of 22 s at 0.1 CPU, and
+the others under 0.3 s.
 
 **`compose.yaml`:**
 
@@ -300,6 +324,59 @@ the app unhealthy and get it restarted. Only the health endpoint is exposed.
 - Settings come from the shell or a `.env` file: `CODE_SECRET`, `APP_PORT` (default 8080),
   `PG_PORT`. Example: `APP_PORT=8081 docker compose --profile full up -d` runs it next to an app
   already using 8080.
+
+## Deploy for free (Render + Neon)
+
+Everything below is on free plans and needs **no credit card**:
+
+| Part | Where | Free plan |
+|---|---|---|
+| App (Docker image) | [Render](https://render.com) web service | 512 MB RAM, 0.1 CPU, 750 h/month, HTTPS on `*.onrender.com`; sleeps after 15 min without traffic |
+| PostgreSQL | [Neon](https://neon.com) | 1 GB storage, 100 compute-hours/month, never expires; sleeps after 5 min idle |
+| Redis | Render Key Value | 25 MB, in memory only |
+
+`render.yaml` describes the Render side (a "Blueprint"), so there is nothing to click together by hand.
+
+**1. Database on Neon**
+1. Sign up at neon.com (GitHub login works) and create a project. Pick region
+   **AWS Asia Pacific (Singapore)** to match the Render region in `render.yaml`.
+2. Open **Connect**, turn **Connection pooling off** (the app has its own pool) and copy the string.
+   It looks like `postgresql://USER:PASSWORD@ep-xxxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`.
+3. Split it into three values:
+   - `DB_URL` = `jdbc:postgresql://ep-xxxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`
+   - `DB_USERNAME` = `USER`
+   - `DB_PASSWORD` = `PASSWORD`
+
+**2. App and Redis on Render**
+1. Sign up at render.com with GitHub and allow access to this repository.
+2. **New → Blueprint**, select the repository. Render reads `render.yaml` and asks for the three
+   `DB_*` values; paste them and click **Apply**.
+3. The first build takes a few minutes, then startup about 2–3 more on the free CPU. Flyway creates
+   the tables in Neon. The app is then at `https://url-shortener.onrender.com` (Render adds a
+   suffix if the name is taken; short links use that address automatically via `RENDER_EXTERNAL_URL`).
+
+After that, every push to `main` deploys automatically, but only once CI has passed
+(`autoDeployTrigger: checksPass`). The old version keeps serving until the new one is ready.
+
+**3. Optional: keep it awake.** A free instance sleeps after 15 minutes without visitors, and the
+next visitor then waits 2–3 minutes for it to start. A free uptime monitor (e.g. UptimeRobot,
+every 5 minutes) on `https://<your-app>.onrender.com/actuator/health/liveness` prevents that. One
+service running all month uses at most 744 of the 750 free hours. Liveness doesn't touch the
+database, so Neon still sleeps whenever nobody is creating or opening links.
+
+What `render.yaml` sets up for the free plan:
+- `CODE_SECRET` is generated by Render (random, 256 bits) and stays the same across deploys;
+- `FORWARD_HEADERS_STRATEGY=native`: Render's proxy ends HTTPS, so the client IP (rate limiting)
+  and `https` (HSTS) come from its `X-Forwarded-*` headers;
+- database pool of 3 with no idle connections (`DB_POOL_MIN_IDLE=0`, closed after 2 minutes), so
+  Neon can sleep;
+- JVM sized for 512 MB: heap at most 50 %, serial GC, no optimising JIT tier (faster start). It
+  used about 260 MB in a local run with the same limits;
+- Redis reachable only from inside the Render account (`ipAllowList: []`).
+
+Free-tier limits to know: Render Key Value keeps data in memory only, so a restart loses the
+cache (refilled from PostgreSQL) and at most 30 s of not-yet-written clicks. Neon takes about a
+second to wake from sleep, so the first database query after a quiet period is slower.
 
 ## Schema migrations
 
@@ -351,6 +428,7 @@ Needs the PostgreSQL test database and Redis running (`docker compose up -d`). T
 | `RateLimitIntegrationTest` | real Redis: limit + 1 refused with `Retry-After`, per-client allowance, redirects/stats unlimited, invalid URLs not counted, allowance back after the window |
 | `RedisUnavailableIntegrationTest` | app starts and serves with Redis down; requests in the backoff window never wait on Redis; clicks written straight to PostgreSQL; rate limit fails open |
 | `FlywayMigrationTest` | database is at the newest migration, none pending |
+| `SecurityHeadersIntegrationTest` | CSP and other headers on pages, API, errors and health; HSTS only over HTTPS; no inline scripts; liveness exposed |
 
 ## Known trade-offs / next steps
 

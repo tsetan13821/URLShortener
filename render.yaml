@@ -1,0 +1,59 @@
+# Render Blueprint: free hosting for the app and its Redis. PostgreSQL lives on Neon's free plan
+# (Render's free PostgreSQL is deleted after 30 days). Steps: README.md, "Deploy for free".
+#
+# Region: Singapore (closest Render region to India). Create the Neon project in
+# "AWS Asia Pacific (Singapore)" too, so every database query stays in the same data centre area.
+services:
+  - type: web
+    name: url-shortener
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    # Readiness: UP only once startup, including the warm-up (config/WarmUp), has finished, so
+    # Render never sends visitors to a cold instance. It doesn't query the database: Render polls
+    # this, and a database check on every poll would keep Neon awake and use up its free hours.
+    healthCheckPath: /actuator/health/readiness
+    # Deploy a push to main only after GitHub Actions CI has passed for it.
+    autoDeployTrigger: checksPass
+    envVars:
+      # Neon: copy from the project's "Connect" dialog (see README). Entered once, on Blueprint creation.
+      - key: DB_URL
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      # Small pool, and no idle connections, so Neon can sleep when nobody uses the app.
+      - key: DB_POOL_SIZE
+        value: "3"
+      - key: DB_POOL_MIN_IDLE
+        value: "0"
+      - key: DB_POOL_IDLE_TIMEOUT_MS
+        value: "120000"
+      - key: SPRING_DATA_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: url-shortener-cache
+          property: connectionString
+      # Random 256-bit key, generated once by Render and kept across deploys.
+      - key: CODE_SECRET
+        generateValue: true
+      # Render's proxy ends HTTPS and adds X-Forwarded-For / -Proto: needed for the real client IP
+      # (rate limiting) and for HSTS.
+      - key: FORWARD_HEADERS_STRATEGY
+        value: native
+      # Free instance: 512 MB RAM, 0.1 CPU. Leave room for non-heap memory, use the single-threaded
+      # GC (no spare CPUs anyway), and skip the slow optimising JIT tier for a faster start.
+      - key: JAVA_TOOL_OPTIONS
+        value: >-
+          -XX:MaxRAMPercentage=50 -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xss512k
+          -XX:+ExitOnOutOfMemoryError
+
+  - type: keyvalue
+    name: url-shortener-cache
+    plan: free
+    region: singapore
+    # Empty allow list: reachable only from services in this Render account, not the internet.
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru

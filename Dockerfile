@@ -33,7 +33,10 @@ EXPOSE 8080
 # Size the heap from the container's memory limit rather than the host's.
 ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
 
-HEALTHCHECK --interval=10s --timeout=3s --start-period=40s --retries=3 \
-  CMD curl -fsS http://localhost:8080/actuator/health || exit 1
+# Readiness: up once started and warmed up. Deliberately not /actuator/health, which queries the
+# database: polling that every 10s would keep a serverless database (Neon) awake for good, and
+# restarting the app wouldn't fix a database problem anyway.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=3 \
+  CMD curl -fsS "http://localhost:${SERVER_PORT:-${PORT:-8080}}/actuator/health/readiness" || exit 1
 
 ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]
