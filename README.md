@@ -1,5 +1,7 @@
 # URL Shortener
 
+[![CI](https://github.com/tsetan13821/URLShortener/actions/workflows/ci.yml/badge.svg)](https://github.com/tsetan13821/URLShortener/actions/workflows/ci.yml)
+
 Spring Boot 4.1 · Java 21 · Spring Data JPA · PostgreSQL · Redis · Maven
 
 Short codes are the Base62 encoding (`[0-9A-Za-z]`) of auto-incremented PostgreSQL IDs:
@@ -168,9 +170,14 @@ mvn test
 Needs the PostgreSQL test database and Redis running (`docker compose up -d`). They use
 `url_shortener_test` and `test:url:` Redis keys, never your dev data.
 
+**CI:** `.github/workflows/ci.yml` runs the same suite on every push to `main` and every pull
+request, against fresh PostgreSQL 18 and Redis 8 service containers. When a run fails, the
+Surefire reports are attached to it as a downloadable artifact.
+
 | Test | Covers |
 |---|---|
 | `Base62Test` | known values, round trips, `Long.MAX_VALUE`, invalid/overflowing input |
+| `UrlNormalizerTest` | browser-accepted URLs (`\|`, `{}`, spaces, Unicode domains) cleaned up; valid ones untouched |
 | `HttpUrlValidatorTest` | real domains / public IPs accepted; bare words, fake TLDs, localhost, private IPs, bad schemes rejected |
 | `UrlMappingRepositoryTest` | real PostgreSQL: schema matches entity, sequence, unique index |
 | `UrlShortenerServiceTest` | create flow, cache hit / miss / not-found (mocked) |

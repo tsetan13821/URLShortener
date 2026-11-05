@@ -46,16 +46,16 @@ class RedisUnavailableIntegrationTest {
             // so it's only checked for correctness.
             redirectAndAssert(code);
 
-            // Later redirects (inside the backoff window) must not touch Redis at all,
-            // so they must be fast: no connection attempt, no timeout.
-            long start = System.nanoTime();
+            // Later redirects (inside the backoff window) must not touch Redis at all. Checked per
+            // request against the Redis timeout (500ms): a request that waited on Redis would take
+            // at least that long, while a PostgreSQL-only redirect takes a few ms even on a slow
+            // CI machine. Per-request (not total) keeps the check meaningful without being flaky.
             for (int i = 0; i < 5; i++) {
+                long start = System.nanoTime();
                 redirectAndAssert(code);
+                long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+                assertThat(elapsedMs).as("redirect %d took %dms", i + 1, elapsedMs).isLessThan(400);
             }
-            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
-            // A single Redis connect/command timeout is 500ms; five requests well under that
-            // proves none of them waited on Redis.
-            assertThat(elapsedMs).isLessThan(500);
         } finally {
             repository.findByShortCode(code).ifPresent(repository::delete);
         }
