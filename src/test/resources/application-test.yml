@@ -13,3 +13,8 @@ app:
     pending-key: "test:clicks:pending"
     # Tests call ClickCounter.flush() themselves; keep the scheduled flush out of their way.
     flush-interval: 1h
+  rate-limit:
+    key-prefix: "test:rl:create:"
+    # Every MockMvc request comes from 127.0.0.1, so a real limit would trip across test classes.
+    # RateLimitIntegrationTest sets a small limit for itself.
+    create-limit: 100000

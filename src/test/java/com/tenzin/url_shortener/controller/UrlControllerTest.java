@@ -3,6 +3,7 @@ package com.tenzin.url_shortener.controller;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -14,11 +15,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Duration;
 import java.time.Instant;
 
 import com.tenzin.url_shortener.dto.LinkStatsResponse;
 import com.tenzin.url_shortener.dto.ShortUrlResponse;
+import com.tenzin.url_shortener.exception.RateLimitExceededException;
 import com.tenzin.url_shortener.exception.ShortUrlNotFoundException;
+import com.tenzin.url_shortener.service.RateLimiter;
 import com.tenzin.url_shortener.service.UrlShortenerService;
 
 import org.junit.jupiter.api.Test;
@@ -39,6 +43,50 @@ class UrlControllerTest {
 
     @MockitoBean
     private UrlShortenerService service;
+
+    /** Mock does nothing by default, i.e. every request is within the limit. */
+    @MockitoBean
+    private RateLimiter rateLimiter;
+
+    @Test
+    void createOverTheLimitReturns429WithRetryAfter() throws Exception {
+        doThrow(new RateLimitExceededException(20, Duration.ofMinutes(1), Duration.ofMillis(36_200)))
+                .when(rateLimiter).checkCreate(anyString());
+
+        mockMvc.perform(post("/api/urls")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"url": "https://example.com/page"}"""))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "37"))
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.title").value("Too many requests"))
+                .andExpect(jsonPath("$.detail").value("You can create up to 20 links per minute. Try again in 37 seconds."))
+                .andExpect(jsonPath("$.limit").value(20))
+                .andExpect(jsonPath("$.windowSeconds").value(60))
+                .andExpect(jsonPath("$.retryAfterSeconds").value(37));
+        verify(service, never()).shorten(anyString());
+    }
+
+    @Test
+    void rateLimitUsesTheClientAddress() throws Exception {
+        mockMvc.perform(post("/api/urls")
+                .with(request -> { request.setRemoteAddr("198.51.100.4"); return request; })
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"url": "https://example.com/page"}"""));
+        verify(rateLimiter).checkCreate("198.51.100.4");
+    }
+
+    @Test
+    void invalidRequestsAreRejectedBeforeTheRateLimit() throws Exception {
+        mockMvc.perform(post("/api/urls")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"url": "not a url"}"""))
+                .andExpect(status().isBadRequest());
+        verify(rateLimiter, never()).checkCreate(anyString());
+    }
 
     @Test
     void createReturns201WithShortUrl() throws Exception {

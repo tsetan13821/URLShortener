@@ -21,7 +21,8 @@ import org.springframework.test.web.servlet.MockMvc;
  * Points the app at a port where nothing listens, i.e. Redis is down from startup.
  * The application must still start, create links and redirect, using PostgreSQL alone.
  */
-@SpringBootTest(properties = "spring.data.redis.port=6390")
+// create-limit=1: with Redis down the rate limit must fail open, so a second create still works.
+@SpringBootTest(properties = {"spring.data.redis.port=6390", "app.rate-limit.create-limit=1"})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class RedisUnavailableIntegrationTest {
@@ -73,6 +74,18 @@ class RedisUnavailableIntegrationTest {
         mockMvc.perform(get("/" + code))
                 .andExpect(status().isFound())
                 .andExpect(header().string("Location", "https://example.com/no-redis"));
+    }
+
+    @Test
+    void rateLimitFailsOpenWithoutRedis() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            String body = mockMvc.perform(post("/api/urls").contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"url\": \"https://example.com/no-redis-limit\"}"))
+                    .andExpect(status().isCreated())
+                    .andReturn().getResponse().getContentAsString();
+            String code = JsonPath.read(body, "$.shortCode");
+            repository.findByShortCode(code).ifPresent(repository::delete);
+        }
     }
 
     @Test

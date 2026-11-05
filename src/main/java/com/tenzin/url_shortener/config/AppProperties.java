@@ -5,6 +5,7 @@ import java.time.Duration;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -18,7 +19,8 @@ import org.springframework.validation.annotation.Validated;
 public record AppProperties(
         @NotBlank String baseUrl,
         @Valid @NotNull Cache cache,
-        @Valid @NotNull Clicks clicks) {
+        @Valid @NotNull Clicks clicks,
+        @Valid @NotNull RateLimit rateLimit) {
 
     public AppProperties {
         // Normalise so we can always build "<baseUrl>/<code>".
@@ -39,5 +41,15 @@ public record AppProperties(
             @NotBlank String pendingKey,
             /** How often pending clicks are written to PostgreSQL. */
             @NotNull Duration flushInterval) {
+    }
+
+    public record RateLimit(
+            boolean enabled,
+            /** Links one client may create per window. */
+            @Positive int createLimit,
+            /** Length of the counting window. */
+            @NotNull Duration window,
+            /** Redis key prefix for the per-client counters. */
+            @NotBlank String keyPrefix) {
     }
 }

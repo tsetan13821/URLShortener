@@ -80,6 +80,21 @@ publicly reachable:
 No DNS lookup is done, so a well-formed domain that isn't registered (`no-such-site-xyz.com`)
 is still accepted. Surrounding whitespace is trimmed. Submitting the same URL twice creates two codes.
 
+**Rate limit:** each client IP can create 20 links per minute (configurable). Request 21 gets
+`429 Too Many Requests` with a `Retry-After` header (seconds until the window ends); the web UI shows
+"Try again in N seconds". Requests rejected by validation don't count. Redirects and stats are never
+limited.
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 37
+Content-Type: application/problem+json
+
+{"title":"Too many requests","status":429,
+ "detail":"You can create up to 20 links per minute. Try again in 37 seconds.",
+ "limit":20,"windowSeconds":60,"retryAfterSeconds":37,"instance":"/api/urls"}
+```
+
 ### Redirect: `GET /{shortCode}`
 
 ```bash
@@ -119,6 +134,7 @@ same status code, so nothing changes for API clients or `curl`.
 | Invalid / missing URL | 400 | `{"title":"Invalid request","status":400,"errors":[{"field":"url","code":"HttpUrl","message":"must be a valid http or https URL with a public domain name"}]}` |
 | Malformed JSON | 400 | |
 | Wrong `Content-Type` | 415 | |
+| Too many links created | 429 | See [Rate limit](#create-a-short-link-post-apiurls); has a `Retry-After` header |
 | Anything unexpected | 500 | Generic message; details logged server-side only |
 
 `errors[].code` is the violated constraint (`NotBlank`, `Size` or `HttpUrl`). It's stable,
@@ -142,6 +158,10 @@ Every setting has a local-dev default and can be overridden with an environment 
 | `CACHE_FAILURE_BACKOFF` | `10s` | After a Redis error, skip Redis (cache and click counting) for this long |
 | `CLICKS_PENDING_KEY` | `clicks:pending` | Redis hash holding clicks not yet written to PostgreSQL |
 | `CLICKS_FLUSH_INTERVAL` | `30s` | How often pending clicks are written to PostgreSQL |
+| `RATE_LIMIT_ENABLED` | `true` | Limit link creation per client IP |
+| `RATE_LIMIT_CREATE` / `RATE_LIMIT_WINDOW` | `20` / `1m` | Links one client may create per window |
+| `RATE_LIMIT_KEY_PREFIX` | `rl:create:` | Redis key namespace for the counters |
+| `FORWARD_HEADERS_STRATEGY` | `none` | Set to `native` only behind a trusted reverse proxy, so the client IP is read from `X-Forwarded-For` |
 | `SERVER_PORT` | `8080` | HTTP port |
 
 ## Design
@@ -151,6 +171,7 @@ controller/  UrlController            HTTP mapping: 201 create, 302 redirect, cl
 service/     UrlShortenerService      create (nextval -> Base62 -> INSERT), cache-aside resolve, stats
              UrlCacheService          Redis get/put with TTL; never throws
              ClickCounter             clicks -> Redis HINCRBY; scheduled batch flush to PostgreSQL
+             RateLimiter              per-client create limit (Redis fixed window, fails open)
              RedisAvailability        shared "Redis is down, skip it for N seconds" backoff
              Base62                   encode/decode, overflow-safe
 repository/  UrlMappingRepository     findByShortCode, nextId()
@@ -196,6 +217,20 @@ after the backoff the cache fills again.
 Measured locally: 7,300 cached redirects/s with counting (7,900 without), and 20,200 clicks
 cost **one** PostgreSQL transaction.
 
+**Rate limiting link creation:**
+- one Redis counter per client, `rl:create:<ip>`: a Lua script does `INCR` and, on the first
+  request, `PEXPIRE <window>` in one step, so a counter can never be left without an expiry and the
+  limit holds across any number of app instances;
+- over the limit → 429 with `Retry-After` = the counter's remaining TTL. Refused attempts still
+  count, so a client that keeps hammering stays blocked until the window ends;
+- IPv6 clients are limited per /64 network, because one connection usually owns a whole /64 and
+  could otherwise use a new address for every request;
+- **fails open:** while Redis is down, creation is not limited, rather than refusing every user
+  because the accelerator is missing;
+- the client IP is the TCP connection's address. Behind a reverse proxy every request would come
+  from the proxy, so set `FORWARD_HEADERS_STRATEGY=native` there. Never set it without a trusted
+  proxy in front: anyone could then send a fake `X-Forwarded-For` to dodge the limit.
+
 ## Schema migrations
 
 The schema is managed by [Flyway](https://documentation.red-gate.com/flyway). Each change is a
@@ -236,10 +271,12 @@ Surefire reports are attached to it as a downloadable artifact.
 | `UrlMappingRepositoryTest` | real PostgreSQL: schema matches entity, sequence, unique index |
 | `UrlShortenerServiceTest` | create flow, cache hit / miss / not-found (mocked) |
 | `UrlCacheServiceTest` | TTL, failures swallowed, backoff window and recovery |
-| `UrlControllerTest` | status codes, validation + error codes, problem-detail format, route pattern, trailing slash, HTML vs JSON 404 |
+| `RateLimiterTest` | IPv4 / IPv6 /64 / IPv4-mapped client keys; `Retry-After` rounding |
+| `UrlControllerTest` | status codes, validation + error codes, problem-detail format, route pattern, trailing slash, HTML vs JSON 404, 429 format |
 | `UrlShortenerIntegrationTest` | full stack: create → redirect → Redis populated with TTL → served from cache; web UI files served |
 | `ClickAnalyticsIntegrationTest` | clicks counted in Redis, flushed to PostgreSQL, stats current; 1,000 concurrent clicks with racing flushes counted exactly; HEAD / unknown codes not counted |
-| `RedisUnavailableIntegrationTest` | app starts and serves with Redis down; requests in the backoff window never wait on Redis; clicks written straight to PostgreSQL |
+| `RateLimitIntegrationTest` | real Redis: limit + 1 refused with `Retry-After`, per-client allowance, redirects/stats unlimited, invalid URLs not counted, allowance back after the window |
+| `RedisUnavailableIntegrationTest` | app starts and serves with Redis down; requests in the backoff window never wait on Redis; clicks written straight to PostgreSQL; rate limit fails open |
 | `FlywayMigrationTest` | database is at the newest migration, none pending |
 
 ## Known trade-offs / next steps
@@ -247,7 +284,10 @@ Surefire reports are attached to it as a downloadable artifact.
 - **Codes are sequential and guessable** (`1`, `2`, `3`…). Fine for public links; for private
   links, start the sequence higher or switch to random codes.
 - **Unknown codes aren't cached**, so scanning random codes reaches PostgreSQL every time.
-  Add short-lived negative caching or rate limiting if that becomes a problem.
+  Creation is rate limited, but redirects aren't (limiting them would also slow real visitors);
+  add short-lived negative caching, or limit at the proxy, if scanning becomes a problem.
+- **Fixed-window rate limit** allows a burst of up to 2× the limit across a window boundary
+  (20 at 0:59, 20 more at 1:00). Fine for abuse protection; a sliding window would be exact.
 - **Click counts can lose up to one flush interval** of clicks if Redis itself crashes (it runs
   without persistence). Enable Redis AOF persistence if exact counts matter. Counts also include
   bots that send `GET`; only `HEAD` requests are excluded.

@@ -74,6 +74,12 @@
   }
 
   function messageFrom(body, status) {
+    if (status === 429) {
+      const wait = body && Number(body.retryAfterSeconds);
+      return wait > 0
+        ? `You've made a lot of links in a short time. Try again in ${wait} second${wait === 1 ? '' : 's'}.`
+        : "You've made a lot of links in a short time. Try again in a minute.";
+    }
     const first = body && Array.isArray(body.errors) ? body.errors[0] : null;
     if (first) return FRIENDLY_ERRORS[first.code] || first.message;
     if (body && body.detail) return body.detail;

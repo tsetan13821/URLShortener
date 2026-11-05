@@ -5,8 +5,10 @@ import java.net.URI;
 import com.tenzin.url_shortener.dto.CreateShortUrlRequest;
 import com.tenzin.url_shortener.dto.LinkStatsResponse;
 import com.tenzin.url_shortener.dto.ShortUrlResponse;
+import com.tenzin.url_shortener.service.RateLimiter;
 import com.tenzin.url_shortener.service.UrlShortenerService;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 
 import org.springframework.http.HttpMethod;
@@ -30,16 +32,26 @@ public class UrlController {
     static final String SHORT_CODE_PATTERN = "[0-9A-Za-z]{1,11}";
 
     private final UrlShortenerService service;
+    private final RateLimiter rateLimiter;
 
-    public UrlController(UrlShortenerService service) {
+    public UrlController(UrlShortenerService service, RateLimiter rateLimiter) {
         this.service = service;
+        this.rateLimiter = rateLimiter;
     }
 
-    /** Creates a short link. 201 Created, with the short URL in both the body and the Location header. */
+    /**
+     * Creates a short link. 201 Created, with the short URL in both the body and the Location header.
+     *
+     * <p>Rate limited per client IP (429 Too Many Requests when over). The check runs after
+     * validation, so rejected URLs don't use up the client's allowance. The IP is the TCP peer, or
+     * the X-Forwarded-For client when {@code server.forward-headers-strategy} trusts a proxy.
+     */
     @PostMapping(path = "/api/urls",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<ShortUrlResponse> create(@Valid @RequestBody CreateShortUrlRequest request) {
+    public ResponseEntity<ShortUrlResponse> create(@Valid @RequestBody CreateShortUrlRequest request,
+                                                   HttpServletRequest servletRequest) {
+        rateLimiter.checkCreate(servletRequest.getRemoteAddr());
         ShortUrlResponse response = service.shorten(request.url());
         return ResponseEntity.created(URI.create(response.shortUrl())).body(response);
     }

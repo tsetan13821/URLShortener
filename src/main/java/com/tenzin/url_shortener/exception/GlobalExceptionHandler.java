@@ -3,6 +3,7 @@ package com.tenzin.url_shortener.exception;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +56,41 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         problem.setTitle("Short URL not found");
         problem.setProperty("shortCode", ex.getShortCode());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(problem);
+    }
+
+    /**
+     * Too many links created: 429 with {@code Retry-After} (seconds), so well-behaved clients know
+     * exactly when to try again. The same value is in the body for clients that only read JSON.
+     */
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ProblemDetail> handleRateLimited(RateLimitExceededException ex) {
+        long retryAfter = ex.getRetryAfterSeconds();
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS,
+                "You can create up to " + ex.getLimit() + " links per " + describe(ex.getWindow())
+                        + ". Try again in " + retryAfter + (retryAfter == 1 ? " second." : " seconds."));
+        problem.setTitle("Too many requests");
+        problem.setProperty("limit", ex.getLimit());
+        problem.setProperty("windowSeconds", ex.getWindow().toSeconds());
+        problem.setProperty("retryAfterSeconds", retryAfter);
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfter))
+                .body(problem);
+    }
+
+    /** "minute", "10 minutes", "hour", "90 seconds": readable wording for the configured window. */
+    static String describe(Duration window) {
+        long seconds = window.toSeconds();
+        if (seconds % 3600 == 0) {
+            return plural(seconds / 3600, "hour");
+        }
+        if (seconds % 60 == 0) {
+            return plural(seconds / 60, "minute");
+        }
+        return plural(seconds, "second");
+    }
+
+    private static String plural(long n, String unit) {
+        return n == 1 ? unit : n + " " + unit + "s";
     }
 
     /** Paths that can't be a short code at all (e.g. /not-a-code): same browser treatment. */

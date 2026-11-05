@@ -55,6 +55,11 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+  # Where the client IP (used for rate limiting) comes from. "none" = the TCP connection, which is
+  # correct when clients connect directly. Behind a trusted reverse proxy / load balancer set
+  # FORWARD_HEADERS_STRATEGY=native (or framework) so X-Forwarded-For is honoured. Never enable it
+  # without such a proxy: clients could then fake their IP to dodge the limit.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:none}
 
 app:
   # Public base URL used to build short links, e.g. https://sho.rt
@@ -70,3 +75,10 @@ app:
     # in one batch every flush-interval (so redirects never write to the database).
     pending-key: ${CLICKS_PENDING_KEY:clicks:pending}
     flush-interval: ${CLICKS_FLUSH_INTERVAL:30s}
+  rate-limit:
+    # Caps link creation (POST /api/urls) per client IP; redirects and stats are never limited.
+    # Over the limit: 429 Too Many Requests with Retry-After. If Redis is down, creation is allowed.
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    create-limit: ${RATE_LIMIT_CREATE:20}
+    window: ${RATE_LIMIT_WINDOW:1m}
+    key-prefix: ${RATE_LIMIT_KEY_PREFIX:rl:create:}

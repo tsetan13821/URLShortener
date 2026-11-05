@@ -48,7 +48,8 @@ class UrlCacheServiceTest {
         lenient().when(redis.opsForValue()).thenReturn(values);
         AppProperties properties = new AppProperties("http://sho.rt",
                 new AppProperties.Cache(TTL, "url:", BACKOFF),
-                new AppProperties.Clicks("clicks:pending", Duration.ofSeconds(30)));
+                new AppProperties.Clicks("clicks:pending", Duration.ofSeconds(30)),
+                new AppProperties.RateLimit(true, 20, Duration.ofMinutes(1), "rl:create:"));
         cache = new UrlCacheService(redis, properties, new RedisAvailability(properties, clock));
     }
 
