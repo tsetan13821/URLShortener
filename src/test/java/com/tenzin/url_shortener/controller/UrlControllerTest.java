@@ -65,7 +65,10 @@ class UrlControllerTest {
             "{\"url\": \"example.com\"}",
             "{\"url\": \"ftp://example.com/file\"}",
             "{\"url\": \"javascript:alert(1)\"}",
-            "{\"url\": \"https://\"}"
+            "{\"url\": \"https://\"}",
+            "{\"url\": \"https://hjfktgdkyfluytliu\"}",
+            "{\"url\": \"https://server.dash\"}",
+            "{\"url\": \"http://localhost:8080/1\"}"
     })
     void createRejectsInvalidUrlsWith400(String body) throws Exception {
         mockMvc.perform(post("/api/urls").contentType(MediaType.APPLICATION_JSON).content(body))
@@ -183,6 +186,7 @@ class UrlControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[0].field").value("url"))
                 .andExpect(jsonPath("$.errors[0].code").value("HttpUrl"))
-                .andExpect(jsonPath("$.errors[0].message").value("must be a valid http or https URL"));
+                .andExpect(jsonPath("$.errors[0].message")
+                        .value("must be a valid http or https URL with a public domain name"));
     }
 }

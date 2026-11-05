@@ -10,7 +10,7 @@
   const FRIENDLY_ERRORS = {
     NotBlank: 'Paste a URL first.',
     Size: 'That URL is too long. The limit is 2,048 characters.',
-    HttpUrl: "That doesn't look like a web address. It needs to be an http:// or https:// link.",
+    HttpUrl: "That doesn't look like a real web address. Check the domain, e.g. example.com.",
   };
 
   const $ = (id) => document.getElementById(id);

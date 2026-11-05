@@ -64,8 +64,17 @@ Content-Type: application/json
  "originalUrl":"https://spring.io/projects/spring-boot","createdAt":"2026-11-05T06:03:51.277447Z"}
 ```
 
-Rules for `url`: required, absolute `http`/`https` with a host, at most 2048 characters.
-Surrounding whitespace is trimmed. Submitting the same URL twice creates two codes.
+Rules for `url`: required, at most 2048 characters, absolute `http`/`https`, and the host must be
+publicly reachable:
+
+- a domain ending in a real top-level domain (checked offline against the IANA list via
+  Apache Commons Validator): `example.com` ✓, `server.dash` ✗, `hjfktgdkyfluytliu` ✗
+- or a public IP address: `8.8.8.8` ✓; `localhost`, `127.0.0.1`, `192.168.x.x`, `10.x.x.x`,
+  `169.254.169.254` and other private/loopback ranges ✗ (a short link to them would only work
+  on the creator's own machine or network)
+
+No DNS lookup is done, so a well-formed domain that isn't registered (`no-such-site-xyz.com`)
+is still accepted. Surrounding whitespace is trimmed. Submitting the same URL twice creates two codes.
 
 ### Redirect: `GET /{shortCode}`
 
@@ -87,13 +96,13 @@ same status code, so nothing changes for API clients or `curl`.
 |---|---|---|
 | Unknown short code | 404 | `{"title":"Short URL not found","status":404,"detail":"No URL found for short code 'abc'","shortCode":"abc","instance":"/abc"}` |
 | Path that can't be a code (`/not-a-code`, > 11 chars) | 404 | Spring's standard "No static resource" problem detail |
-| Invalid / missing URL | 400 | `{"title":"Invalid request","status":400,"errors":[{"field":"url","code":"HttpUrl","message":"must be a valid http or https URL"}]}` |
-
-`errors[].code` is the violated constraint (`NotBlank`, `Size` or `HttpUrl`). It's stable,
-so clients can map it to their own wording (the web UI does), while `message` is for humans.
+| Invalid / missing URL | 400 | `{"title":"Invalid request","status":400,"errors":[{"field":"url","code":"HttpUrl","message":"must be a valid http or https URL with a public domain name"}]}` |
 | Malformed JSON | 400 | |
 | Wrong `Content-Type` | 415 | |
 | Anything unexpected | 500 | Generic message; details logged server-side only |
+
+`errors[].code` is the violated constraint (`NotBlank`, `Size` or `HttpUrl`). It's stable,
+so clients can map it to their own wording (the web UI does), while `message` is for humans.
 
 ## Configuration
 
@@ -122,7 +131,7 @@ service/     UrlShortenerService      create (nextval -> Base62 -> INSERT) and c
              Base62                   encode/decode, overflow-safe
 repository/  UrlMappingRepository     findByShortCode, nextId()
 entity/      UrlMapping               immutable; Persistable so save() is a single INSERT
-dto/         CreateShortUrlRequest, ShortUrlResponse, @HttpUrl validator
+dto/         CreateShortUrlRequest, ShortUrlResponse, @HttpUrl validator (real TLD / public IP)
 exception/   GlobalExceptionHandler   ProblemDetail for API clients, HTML 404 page for browsers
 config/      AppProperties, RedisConfig, ClockConfig
 
@@ -162,6 +171,7 @@ Needs the PostgreSQL test database and Redis running (`docker compose up -d`). T
 | Test | Covers |
 |---|---|
 | `Base62Test` | known values, round trips, `Long.MAX_VALUE`, invalid/overflowing input |
+| `HttpUrlValidatorTest` | real domains / public IPs accepted; bare words, fake TLDs, localhost, private IPs, bad schemes rejected |
 | `UrlMappingRepositoryTest` | real PostgreSQL: schema matches entity, sequence, unique index |
 | `UrlShortenerServiceTest` | create flow, cache hit / miss / not-found (mocked) |
 | `UrlCacheServiceTest` | TTL, failures swallowed, backoff window and recovery |
@@ -176,4 +186,8 @@ Needs the PostgreSQL test database and Redis running (`docker compose up -d`). T
 - **Unknown codes aren't cached**, so scanning random codes reaches PostgreSQL every time.
   Add short-lived negative caching or rate limiting if that becomes a problem.
 - **Schema evolution:** `schema.sql` handles creation only; adopt Flyway before the schema changes.
-- The app doesn't stop you shortening its own short URLs (redirect chains).
+- **Top-level-domain list is bundled** with Apache Commons Validator, so a newly created TLD is
+  only recognised after upgrading that dependency (new TLDs are rare).
+- **Redirect chains:** locally, the app's own short links are rejected because `localhost` is
+  blocked. Once `APP_BASE_URL` is a public domain, shortening an existing short link is possible;
+  block the app's own host in `HttpUrlValidator` if that matters.
